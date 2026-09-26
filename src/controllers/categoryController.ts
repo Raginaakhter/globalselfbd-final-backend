@@ -314,10 +314,16 @@ export const updateCategoryStatus = async (req: Request, res: Response) => {
   category.status = status;
   await category.save();
 
+  // Same shape as the other category responses (path, parent, counts)
+  const map = await loadCategoryMap();
+  const counts = {
+    children: await countBy(Category, "parentCategoryId", [category._id]),
+    products: await countBy(Product, "categoryId", [category._id]),
+  };
   res.status(200).json({
     success: true,
     message: `Category ${status === "ACTIVE" ? "activated" : "deactivated"} successfully`,
-    data: category,
+    data: toCategoryResponse(category, map, counts),
   });
 };
 

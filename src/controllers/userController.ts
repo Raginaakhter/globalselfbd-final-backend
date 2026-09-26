@@ -12,6 +12,7 @@ import {
   escapeRegex,
   getPagination,
   queryString,
+  normalizeBdPhone,
 } from "../utils/validators";
 import { getAuthUser } from "../middleware/auth";
 import { ROLES } from "../config/permissions";
@@ -64,7 +65,16 @@ const findAssignableRole = async (req: Request, roleId: unknown): Promise<RoleDo
   return role;
 };
 
+// Short role info for activity logs
 const roleRef = (role: RoleDocument | null) => (role ? { _id: role._id, name: role.name } : null);
+
+// Role as shown on users in API responses (same fields as ROLE_FIELDS)
+const roleSummary = (role: RoleDocument) => ({
+  _id: role._id,
+  name: role.name,
+  status: role.status,
+  isProtected: role.isProtected,
+});
 
 // @desc    List users (search, filter by role/status, paginated)
 // @route   GET /api/users
@@ -151,12 +161,11 @@ export const createUser = async (req: Request, res: Response) => {
     newValue: { fullName: user.fullName, email: user.email, role: role.name },
   });
 
-  const { password: _password, ...data } = user.toObject();
-
+  // toJSON strips the password and other private fields
   res.status(201).json({
     success: true,
     message: "User created successfully",
-    data: { ...data, role: roleRef(role) },
+    data: { ...user.toJSON(), role: roleSummary(role) },
   });
 };
 
@@ -187,10 +196,62 @@ export const changeUserRole = async (req: Request, res: Response) => {
     newValue: roleRef(newRole),
   });
 
-  user.role = newRole;
   res.status(200).json({
     success: true,
     message: "User role updated successfully",
+    data: await findUserOr404(String(user._id)),
+  });
+};
+
+// @desc    Edit another user's details (name, email, phone). Passwords are never set here:
+//          users change their own password with forgot-password (email OTP).
+// @route   PUT /api/users/:id
+// @access  users.update
+export const updateUser = async (req: Request, res: Response) => {
+  const { fullName, email, phone } = (req.body || {}) as Body;
+  if (fullName === undefined && email === undefined && phone === undefined) {
+    throw new AppError("Send at least one field to update: fullName, email or phone", 400);
+  }
+
+  const user = await findUserOr404(req.params.id);
+  // Not yourself (use PUT /api/auth/me) and not someone with more permissions than you
+  await assertCanManageUser(req, user);
+
+  const before = { fullName: user.fullName, email: user.email, phone: user.phone };
+
+  if (fullName !== undefined) {
+    if (!isNonEmptyString(fullName)) throw new AppError("Full name cannot be empty", 400);
+    if (fullName.trim().length > 100) throw new AppError("Full name cannot exceed 100 characters", 400);
+    user.fullName = fullName.trim();
+  }
+  if (email !== undefined) {
+    if (!isNonEmptyString(email) || !EMAIL_REGEX.test(email)) throw new AppError("Please provide a valid email", 400);
+    const newEmail = email.trim().toLowerCase();
+    if (newEmail !== user.email && (await User.exists({ email: newEmail, _id: { $ne: user._id } }))) {
+      throw new AppError("This email is already used by another account", 409);
+    }
+    user.email = newEmail;
+  }
+  if (phone !== undefined) {
+    if (phone === null || phone === "") {
+      user.phone = "";
+    } else {
+      const normalized = typeof phone === "string" ? normalizeBdPhone(phone) : null;
+      if (!normalized) throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
+      user.phone = normalized;
+    }
+  }
+
+  await user.save({ validateBeforeSave: false });
+
+  const after = { fullName: user.fullName, email: user.email, phone: user.phone };
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    await logActivity(req, { action: "USER_UPDATED", targetUserId: user._id, oldValue: before, newValue: after });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "User updated successfully",
     data: user,
   });
 };

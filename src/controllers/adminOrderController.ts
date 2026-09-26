@@ -15,11 +15,24 @@ import {
   PAYMENT_TRANSITIONS,
   isOrderStatus,
   isPaymentStatus,
+  type OrderStatus,
+  type PaymentStatus,
 } from "../config/orderOptions";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 
 type Body = Record<string, unknown>;
+
+// Record when an order reached a step (used by the sales/payment reports)
+const statusTimestamp = (status: OrderStatus): Record<string, Date> => {
+  const field = ({ CONFIRMED: "confirmedAt", SHIPPED: "shippedAt", DELIVERED: "deliveredAt" } as Partial<Record<OrderStatus, string>>)[status];
+  return field ? { [field]: new Date() } : {};
+};
+const paymentTimestamp = (status: PaymentStatus): Record<string, Date | null> => {
+  if (status === "PAID") return { paidAt: new Date(), refundedAt: null };
+  if (status === "REFUNDED") return { refundedAt: new Date() };
+  return {};
+};
 
 // Dates from the admin panel are Bangladesh time (UTC+6)
 const TIMEZONE = "+06:00";
@@ -164,7 +177,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     // Only update if nobody changed the status in the meantime
     updated = await Order.findOneAndUpdate(
       { _id: order._id, orderStatus: from },
-      { $set: { orderStatus: status } },
+      { $set: { orderStatus: status, ...statusTimestamp(status) } },
       { returnDocument: "after" }
     );
     if (!updated) throw new AppError("Order status was changed by someone else. Please reload", 409);
@@ -212,7 +225,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
 
   const updated = await Order.findOneAndUpdate(
     { _id: order._id, paymentStatus: from },
-    { $set: { paymentStatus } },
+    { $set: { paymentStatus, ...paymentTimestamp(paymentStatus) } },
     { returnDocument: "after" }
   );
   if (!updated) throw new AppError("Payment status was changed by someone else. Please reload", 409);

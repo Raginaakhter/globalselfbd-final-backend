@@ -80,6 +80,11 @@ export const toOrderResponse = (
       orderNotes: o.orderNotes,
     },
     cancelledAt: o.cancelledAt,
+    confirmedAt: o.confirmedAt ?? null,
+    shippedAt: o.shippedAt ?? null,
+    deliveredAt: o.deliveredAt ?? null,
+    paidAt: o.paidAt ?? null,
+    refundedAt: o.refundedAt ?? null,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
     ...(customer !== undefined

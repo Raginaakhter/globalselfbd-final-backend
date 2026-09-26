@@ -10,6 +10,7 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   products: ["view", "create", "update", "delete"],
   categories: ["view", "create", "update", "delete"],
   brands: ["view", "create", "update", "delete"],
+  banners: ["view", "create", "update", "delete"],
   inventory: ["view", "create", "update"],
   // orders.view = own orders (customers); orders.viewAll = every customer's orders (admin panel)
   orders: ["view", "create", "update", "delete", "viewAll", "status", "paymentStatus"],

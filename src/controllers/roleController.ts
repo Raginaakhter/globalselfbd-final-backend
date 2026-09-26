@@ -98,7 +98,7 @@ export const getRoles = async (req: Request, res: Response) => {
     filter.status = status;
   }
 
-  const roles = await Role.find(filter).sort({ createdAt: 1 }).lean();
+  const roles = await Role.find(filter).select("-__v").sort({ createdAt: 1 }).lean();
   const roleIds = roles.map((r) => r._id);
 
   const [userCounts, permissionCounts] = await Promise.all([

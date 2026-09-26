@@ -30,6 +30,12 @@ export interface IOrder {
   shippingArea: string;
   orderNotes: string;
   cancelledAt: Date | null;
+  // When each step happened (used by the sales and payment reports)
+  confirmedAt: Date | null;
+  shippedAt: Date | null;
+  deliveredAt: Date | null;
+  paidAt: Date | null;
+  refundedAt: Date | null;
   // Set once when stock is returned, so a cancel can never restore stock twice
   stockRestoredAt: Date | null;
   createdAt: Date;
@@ -57,6 +63,11 @@ const orderSchema = new Schema<IOrder>(
     shippingArea: { type: String, required: true, trim: true },
     orderNotes: { type: String, trim: true, default: "" },
     cancelledAt: { type: Date, default: null },
+    confirmedAt: { type: Date, default: null },
+    shippedAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null, index: true },
+    paidAt: { type: Date, default: null, index: true },
+    refundedAt: { type: Date, default: null },
     stockRestoredAt: { type: Date, default: null },
   },
   {

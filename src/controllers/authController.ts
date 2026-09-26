@@ -12,7 +12,8 @@ import {
   buildUserSession,
   sendTokenResponse,
 } from "../utils/tokens";
-import { isNonEmptyString } from "../utils/validators";
+import { isNonEmptyString, normalizeBdPhone } from "../utils/validators";
+import { isValidImageUrl } from "../utils/imageValidation";
 import { isEmailConfigured, sendPasswordResetOtpEmail } from "../utils/sendEmail";
 import { getAuthUser } from "../middleware/auth";
 import { ROLES } from "../config/permissions";
@@ -171,6 +172,74 @@ export const getMe = async (req: Request, res: Response) => {
     success: true,
     message: "Profile fetched successfully",
     data: await buildUserSession(getAuthUser(req)),
+  });
+};
+
+// @desc    Edit my profile: full name, phone, avatar, email (email needs the current password).
+//          The password is never changed here: use forgot-password (email OTP) instead.
+// @route   PUT /api/auth/me
+// @access  Private (any logged-in user, own account only)
+export const updateMe = async (req: Request, res: Response) => {
+  const authUser = getAuthUser(req);
+  const body = (req.body || {}) as Body;
+  const { fullName, phone, avatarUrl, email, currentPassword } = body;
+
+  // Role, status and password are never changed here
+  if (fullName === undefined && phone === undefined && avatarUrl === undefined && email === undefined) {
+    throw new AppError("Send at least one field to update: fullName, phone, avatarUrl or email", 400);
+  }
+
+  const user = await User.findById(authUser._id).select("+password");
+  if (!user) throw new AppError("User no longer exists", 401);
+
+  if (fullName !== undefined) {
+    if (!isNonEmptyString(fullName)) throw new AppError("Full name cannot be empty", 400);
+    if (fullName.trim().length > 100) throw new AppError("Full name cannot exceed 100 characters", 400);
+    user.fullName = fullName.trim();
+  }
+
+  if (phone !== undefined) {
+    if (phone === null || phone === "") {
+      user.phone = "";
+    } else {
+      const normalized = typeof phone === "string" ? normalizeBdPhone(phone) : null;
+      if (!normalized) throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
+      user.phone = normalized;
+    }
+  }
+
+  if (avatarUrl !== undefined) {
+    if (avatarUrl === null || avatarUrl === "") user.avatarUrl = "";
+    else if (!isValidImageUrl(avatarUrl)) throw new AppError("Avatar must be a valid image URL", 400);
+    else user.avatarUrl = avatarUrl.trim();
+  }
+
+  if (email !== undefined) {
+    assertEmail(email);
+    const newEmail = email.trim().toLowerCase();
+    if (newEmail !== user.email) {
+      // Changing the login email is sensitive: confirm with the current password
+      if (typeof currentPassword !== "string" || !currentPassword) {
+        throw new AppError("Enter your current password to change your email", 400);
+      }
+      if (!(await user.matchPassword(currentPassword))) {
+        throw new AppError("Current password is incorrect", 401);
+      }
+      if (await User.exists({ email: newEmail, _id: { $ne: user._id } })) {
+        throw new AppError("This email is already used by another account", 409);
+      }
+      user.email = newEmail;
+    }
+  }
+
+  await user.save();
+
+  const updated = await User.findById(user._id).populate<{ role: RoleDocument | null }>("role");
+  if (!updated) throw new AppError("User no longer exists", 401);
+  res.status(200).json({
+    success: true,
+    message: "Profile updated successfully",
+    data: await buildUserSession(updated),
   });
 };
 

@@ -6,7 +6,7 @@ import AppError from "./AppError";
 import { getVisibleCategoryIds } from "./categoryTree";
 import { getAvailability, getFinalPrice } from "./productView";
 import { quantitiesByProduct } from "./inventory";
-import { isNonEmptyString } from "./validators";
+import { isNonEmptyString, normalizeBdPhone } from "./validators";
 import { PAYMENT_METHODS, SHIPPING, isPaymentMethod, type PaymentMethod } from "../config/orderOptions";
 import type { Size } from "../config/productOptions";
 
@@ -165,7 +165,6 @@ export interface ShippingInfo {
 }
 
 // Validate checkout form. Only these fields are read (postal code is not part of the system).
-const BD_PHONE = /^(?:\+?88)?01[3-9]\d{8}$/;
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
 
 export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingInfo => {
@@ -182,9 +181,8 @@ export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingI
   };
 
   const customerName = text(body.customerName, "Customer name", { required: true, max: 100 });
-  const rawPhone = text(body.phoneNumber, "Phone number", { required: true, max: 20 }).replace(/[\s-]/g, "");
-  if (!BD_PHONE.test(rawPhone)) throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
-  const phoneNumber = rawPhone.slice(-11);
+  const phoneNumber = normalizeBdPhone(text(body.phoneNumber, "Phone number", { required: true, max: 20 }));
+  if (!phoneNumber) throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
 
   const email = text(body.email, "Email", { required: false, max: 100 });
   if (email && !EMAIL_REGEX.test(email)) throw new AppError("Please provide a valid email", 400);

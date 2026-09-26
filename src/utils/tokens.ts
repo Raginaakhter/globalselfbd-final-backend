@@ -64,6 +64,8 @@ export const buildUserSession = async (user: AuthUser) => {
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
+      phone: user.phone || "",
+      avatarUrl: user.avatarUrl || "",
       status: user.status,
       role: user.role ? { _id: user.role._id, name: user.role.name, status: user.role.status } : null,
       createdAt: user.createdAt,

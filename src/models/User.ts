@@ -11,6 +11,9 @@ export interface IUser {
   // Always set by the backend (never from client input)
   role: Types.ObjectId;
   status: Status;
+  // Optional profile details (editable by the user)
+  phone: string;
+  avatarUrl: string;
   passwordChangedAt?: Date;
   // Password reset OTP (only a keyed hash is stored)
   passwordResetOtp: string | null;
@@ -34,6 +37,16 @@ export type UserDocument = HydratedDocument<IUser, IUserMethods>;
 
 // A user loaded with populate("role") — what req.user holds
 export type AuthUser = Omit<UserDocument, "role"> & { role: RoleDocument | null };
+
+// Stripped from every JSON response
+export const PRIVATE_FIELDS = [
+  "password",
+  "passwordChangedAt",
+  "passwordResetOtp",
+  "passwordResetExpires",
+  "passwordResetAttempts",
+  "passwordResetSentAt",
+] as const;
 
 const userSchema = new Schema<IUser, UserModel, IUserMethods>(
   {
@@ -69,6 +82,8 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
       default: "ACTIVE",
       index: true,
     },
+    phone: { type: String, trim: true, default: "" },
+    avatarUrl: { type: String, trim: true, default: "" },
     passwordChangedAt: Date,
     passwordResetOtp: { type: String, select: false, default: null },
     passwordResetExpires: { type: Date, select: false, default: null },
@@ -77,6 +92,13 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
   },
   {
     timestamps: true,
+    // Never send secrets or internal fields in API responses, even if a handler forgets to remove them
+    toJSON: {
+      transform: (_doc, ret: Record<string, unknown>) => {
+        for (const field of PRIVATE_FIELDS) delete ret[field];
+        return ret;
+      },
+    },
   }
 );
 

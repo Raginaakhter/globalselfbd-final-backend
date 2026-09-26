@@ -1,0 +1,233 @@
+import type { Request, Response } from "express";
+import type { PipelineStage } from "mongoose";
+import Order from "../models/Order";
+import AppError from "../utils/AppError";
+import { queryString } from "../utils/validators";
+import { ORDER_STATUSES } from "../config/orderOptions";
+
+// Note: Express 5 forwards errors thrown in async handlers to the error handler
+// All reports use Bangladesh time (UTC+6): "today" starts at 12:00 AM in Dhaka.
+
+const BD_OFFSET_MS = 6 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const BD_TIMEZONE = "+06:00";
+
+// 12:00 AM Bangladesh time, `daysAgo` days before today
+const startOfBdDay = (daysAgo = 0): Date => {
+  const bdNow = new Date(Date.now() + BD_OFFSET_MS);
+  const bdMidnight = Date.UTC(bdNow.getUTCFullYear(), bdNow.getUTCMonth(), bdNow.getUTCDate());
+  return new Date(bdMidnight - BD_OFFSET_MS - daysAgo * DAY_MS);
+};
+
+interface Period {
+  key: string;
+  label: string;
+  from: Date;
+  to: Date;
+}
+
+// Rolling windows that include today (e.g. last 7 days = today + 6 days before)
+const buildPeriods = (): Period[] => {
+  const now = new Date();
+  const today = startOfBdDay(0);
+  const since = (days: number) => startOfBdDay(days - 1);
+  return [
+    { key: "today", label: "Today", from: today, to: now },
+    { key: "yesterday", label: "Yesterday", from: startOfBdDay(1), to: today },
+    { key: "last7Days", label: "Last 7 days", from: since(7), to: now },
+    { key: "last14Days", label: "Last 14 days", from: since(14), to: now },
+    { key: "last30Days", label: "Last 1 month (30 days)", from: since(30), to: now },
+    { key: "last6Months", label: "Last 6 months (180 days)", from: since(180), to: now },
+    { key: "last1Year", label: "Last 1 year (365 days)", from: since(365), to: now },
+  ];
+};
+
+interface Totals {
+  amount: number;
+  orders: number;
+  subtotal: number;
+  shippingCost: number;
+  discount: number;
+}
+const EMPTY: Totals = { amount: 0, orders: 0, subtotal: 0, shippingCost: 0, discount: 0 };
+const round = (n: number) => Math.round(n * 100) / 100;
+
+// Sum orders per period in one query. `dateExpr` picks the date each order counts on.
+const totalsByPeriod = async (match: Record<string, unknown>, dateExpr: unknown, periods: Period[]) => {
+  const earliest = periods.reduce((min, p) => (p.from < min ? p.from : min), periods[0].from);
+  const group = {
+    _id: null,
+    amount: { $sum: "$totalAmount" },
+    subtotal: { $sum: "$subtotal" },
+    shippingCost: { $sum: "$shippingCost" },
+    discount: { $sum: "$discount" },
+    orders: { $sum: 1 },
+  };
+  const pipeline: PipelineStage[] = [
+    { $match: match },
+    { $addFields: { reportDate: dateExpr } },
+    { $match: { reportDate: { $gte: earliest } } },
+    {
+      $facet: Object.fromEntries(
+        periods.map((p) => [p.key, [{ $match: { reportDate: { $gte: p.from, $lt: p.to } } }, { $group: group }]])
+      ),
+    },
+  ];
+  const [result] = await Order.aggregate<Record<string, (Totals & { _id: null })[]>>(pipeline);
+
+  return periods.map((p) => {
+    const t = result[p.key][0] || EMPTY;
+    return {
+      key: p.key,
+      label: p.label,
+      from: p.from,
+      to: p.to,
+      amount: round(t.amount),
+      orders: t.orders,
+      productSales: round(t.subtotal),
+      shippingCost: round(t.shippingCost),
+      discount: round(t.discount),
+    };
+  });
+};
+
+// Old orders (before step dates were saved) fall back to their last update time
+const deliveredDate = { $ifNull: ["$deliveredAt", "$updatedAt"] };
+const paidDate = { $ifNull: ["$paidAt", "$updatedAt"] };
+const refundedDate = { $ifNull: ["$refundedAt", "$updatedAt"] };
+
+// @desc    Sales for the dashboard: delivered orders (refunds excluded) per period
+// @route   GET /api/reports/sales
+// @access  sales.view
+export const getSalesSummary = async (req: Request, res: Response) => {
+  const periods = buildPeriods();
+  const [sales, pipelineRows] = await Promise.all([
+    totalsByPeriod({ orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } }, deliveredDate, periods),
+    // Orders still in progress right now (not time based)
+    Order.aggregate<{ _id: string; orders: number; amount: number }>([
+      { $group: { _id: "$orderStatus", orders: { $sum: 1 }, amount: { $sum: "$totalAmount" } } },
+    ]),
+  ]);
+
+  const byStatus = Object.fromEntries(
+    ORDER_STATUSES.map((s) => {
+      const row = pipelineRows.find((r) => r._id === s);
+      return [s, { orders: row ? row.orders : 0, amount: row ? round(row.amount) : 0 }];
+    })
+  );
+
+  res.status(200).json({
+    success: true,
+    message: "Sales summary fetched successfully",
+    data: {
+      currency: "BDT",
+      timezone: "Asia/Dhaka (UTC+6)",
+      basis: "Delivered orders; refunded orders are excluded. amount = totalAmount (products + shipping - discount)",
+      periods: sales,
+      ordersByStatus: byStatus,
+    },
+  });
+};
+
+// @desc    Payments received and refunded per period
+// @route   GET /api/reports/payments
+// @access  payments.view
+export const getPaymentsSummary = async (req: Request, res: Response) => {
+  const periods = buildPeriods();
+  const [received, refunded, pending] = await Promise.all([
+    totalsByPeriod({ paymentStatus: "PAID" }, paidDate, periods),
+    totalsByPeriod({ paymentStatus: "REFUNDED" }, refundedDate, periods),
+    // Money not collected yet (unpaid orders that are not cancelled)
+    Order.aggregate<{ _id: string; orders: number; amount: number }>([
+      { $match: { paymentStatus: { $in: ["PENDING", "FAILED"] }, orderStatus: { $ne: "CANCELLED" } } },
+      { $group: { _id: "$paymentMethod", orders: { $sum: 1 }, amount: { $sum: "$totalAmount" } } },
+    ]),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    message: "Payments summary fetched successfully",
+    data: {
+      currency: "BDT",
+      timezone: "Asia/Dhaka (UTC+6)",
+      periods: received.map((p, i) => ({
+        key: p.key,
+        label: p.label,
+        from: p.from,
+        to: p.to,
+        received: { amount: p.amount, orders: p.orders },
+        refunded: { amount: refunded[i].amount, orders: refunded[i].orders },
+        net: round(p.amount - refunded[i].amount),
+      })),
+      outstanding: {
+        amount: round(pending.reduce((sum, r) => sum + r.amount, 0)),
+        orders: pending.reduce((sum, r) => sum + r.orders, 0),
+        byPaymentMethod: pending.map((r) => ({ paymentMethod: r._id, orders: r.orders, amount: round(r.amount) })),
+      },
+    },
+  });
+};
+
+const RANGES: Record<string, { days: number; unit: "day" | "month" }> = {
+  "7d": { days: 7, unit: "day" },
+  "14d": { days: 14, unit: "day" },
+  "30d": { days: 30, unit: "day" },
+  "6m": { days: 180, unit: "month" },
+  "1y": { days: 365, unit: "month" },
+};
+
+// Every day/month label in the range, so days without sales show as 0
+const bucketLabels = (from: Date, unit: "day" | "month"): string[] => {
+  const labels: string[] = [];
+  const cursor = new Date(from.getTime() + BD_OFFSET_MS);
+  const end = new Date(Date.now() + BD_OFFSET_MS);
+  while (cursor <= end) {
+    const label = cursor.toISOString().slice(0, unit === "day" ? 10 : 7);
+    if (labels[labels.length - 1] !== label) labels.push(label);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return labels;
+};
+
+// @desc    Sales chart data: delivered sales per day (7d/14d/30d) or per month (6m/1y)
+// @route   GET /api/reports/sales/chart?range=7d
+// @access  sales.view
+export const getSalesChart = async (req: Request, res: Response) => {
+  const range = queryString(req.query.range) || "7d";
+  const config = RANGES[range];
+  if (!config) throw new AppError(`range must be one of: ${Object.keys(RANGES).join(", ")}`, 400);
+
+  const from = startOfBdDay(config.days - 1);
+  const rows = await Order.aggregate<{ _id: string; amount: number; orders: number }>([
+    { $match: { orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } } },
+    { $addFields: { reportDate: deliveredDate } },
+    { $match: { reportDate: { $gte: from } } },
+    {
+      $group: {
+        _id: {
+          $dateToString: { date: "$reportDate", format: config.unit === "day" ? "%Y-%m-%d" : "%Y-%m", timezone: BD_TIMEZONE },
+        },
+        amount: { $sum: "$totalAmount" },
+        orders: { $sum: 1 },
+      },
+    },
+  ]);
+  const byLabel = new Map(rows.map((r) => [r._id, r]));
+  const points = bucketLabels(from, config.unit).map((label) => ({
+    label,
+    amount: round(byLabel.get(label)?.amount || 0),
+    orders: byLabel.get(label)?.orders || 0,
+  }));
+
+  res.status(200).json({
+    success: true,
+    message: "Sales chart fetched successfully",
+    data: {
+      range,
+      groupBy: config.unit,
+      currency: "BDT",
+      total: { amount: round(points.reduce((s, p) => s + p.amount, 0)), orders: points.reduce((s, p) => s + p.orders, 0) },
+      points,
+    },
+  });
+};

@@ -4,6 +4,10 @@ import mongoose from "mongoose";
 // Local/ISP DNS often refuses SRV lookups needed by mongodb+srv:// URIs
 dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
+// "__v" is Mongoose's internal version counter; keep it out of API responses
+mongoose.set("toJSON", { versionKey: false });
+mongoose.set("toObject", { versionKey: false });
+
 const connectDB = async (): Promise<void> => {
   if (!process.env.MONGO_URI) {
     console.error("❌ MONGO_URI is not set");

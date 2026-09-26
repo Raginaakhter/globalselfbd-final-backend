@@ -1,7 +1,17 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 const router = express.Router();
-import { register, login, refreshToken, logout, getMe, forgotPassword, verifyResetOtp, resetPassword } from "../controllers/authController";
+import {
+  register,
+  login,
+  refreshToken,
+  logout,
+  getMe,
+  updateMe,
+  forgotPassword,
+  verifyResetOtp,
+  resetPassword,
+} from "../controllers/authController";
 import { authenticate } from "../middleware/auth";
 
 // Brute-force protection for login/register/password endpoints
@@ -21,5 +31,6 @@ router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/verify-reset-otp", authLimiter, verifyResetOtp);
 router.post("/reset-password", authLimiter, resetPassword);
 router.get("/me", authenticate, getMe);
+router.put("/me", authenticate, updateMe);
 
 export default router;

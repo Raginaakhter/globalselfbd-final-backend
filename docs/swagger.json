@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "GlobalShelfBD API",
-    "version": "4.0.0",
+    "version": "5.0.0",
     "description": "E-commerce backend with JWT authentication and permission-based access control.\n\n**How to test protected routes:**\n1. Call `/api/auth/login` (the Admin email and password are in `.env`: `ADMIN_EMAIL`, `ADMIN_PASSWORD`)\n2. Copy `data.accessToken` from the response\n3. Click **Authorize** (top right) and paste the token\n\nAccess token expires in 15 minutes. Use `/api/auth/refresh-token` to get a new one.\n\n**Response format:** every API returns `{ success, message, data }`. Errors return `{ success: false, message }`.\n\n**Status codes:** 200 OK, 201 Created, 400 Bad Request, 401 Unauthorized (not logged in / bad token), 403 Forbidden (no permission / inactive), 404 Not Found, 409 Conflict (duplicate / role in use), 429 Too Many Requests, 500 Internal Server Error."
   },
   "servers": [
@@ -67,6 +67,22 @@
     {
       "name": "Admin Orders",
       "description": "Admin panel: all customer orders, status and payment status"
+    },
+    {
+      "name": "Banners",
+      "description": "Landing page banners/slider (admin)"
+    },
+    {
+      "name": "Brands",
+      "description": "Brands for the Shop Top Brands section (admin)"
+    },
+    {
+      "name": "Footer",
+      "description": "Website footer content (admin)"
+    },
+    {
+      "name": "Reports",
+      "description": "Sales and payment totals for the admin dashboard (Bangladesh time)"
     }
   ],
   "paths": {
@@ -115,6 +131,42 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuthResponse"
+                },
+                "examples": {
+                  "Customer": {
+                    "summary": "Every new registration gets the Customer role",
+                    "value": {
+                      "success": true,
+                      "message": "User registered successfully",
+                      "data": {
+                        "user": {
+                          "_id": "6ab7778093bb757642b6f250",
+                          "fullName": "Rahim Customer",
+                          "email": "customer.demo@example.com",
+                          "status": "ACTIVE",
+                          "role": {
+                            "_id": "6ab50f8e6273e1bbbd2e4bdb",
+                            "name": "Customer",
+                            "status": "ACTIVE"
+                          },
+                          "createdAt": "2026-09-26T07:42:56.022Z"
+                        },
+                        "permissions": [
+                          "cart.manage",
+                          "orders.create",
+                          "orders.view",
+                          "products.view",
+                          "profile.update",
+                          "profile.view",
+                          "reviews.create",
+                          "wishlist.manage"
+                        ],
+                        "menu": [],
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature",
+                        "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -154,6 +206,32 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/LoginRequest"
+              },
+              "examples": {
+                "Admin": {
+                  "value": {
+                    "email": "admin@globalshelfbd.com",
+                    "password": "<ADMIN_PASSWORD from .env>"
+                  }
+                },
+                "Manager": {
+                  "value": {
+                    "email": "manager@example.com",
+                    "password": "123456"
+                  }
+                },
+                "Salesman": {
+                  "value": {
+                    "email": "salesman@example.com",
+                    "password": "123456"
+                  }
+                },
+                "Customer": {
+                  "value": {
+                    "email": "customer@example.com",
+                    "password": "123456"
+                  }
+                }
               }
             }
           }
@@ -165,6 +243,315 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuthResponse"
+                },
+                "examples": {
+                  "Admin": {
+                    "summary": "Admin (all 60 permissions, full dashboard menu)",
+                    "value": {
+                      "success": true,
+                      "message": "Login successful",
+                      "data": {
+                        "user": {
+                          "_id": "6ab50f9aa10eae2c8f3953d3",
+                          "fullName": "Super Admin",
+                          "email": "admin@globalshelfbd.com",
+                          "status": "ACTIVE",
+                          "role": {
+                            "_id": "6ab50f8b9bfec4ab147b6d88",
+                            "name": "Admin",
+                            "status": "ACTIVE"
+                          },
+                          "createdAt": "2026-09-24T11:55:06.118Z"
+                        },
+                        "permissions": [
+                          "activityLogs.view",
+                          "brands.create",
+                          "brands.delete",
+                          "brands.update",
+                          "brands.view",
+                          "cart.manage",
+                          "categories.create",
+                          "categories.delete",
+                          "categories.update",
+                          "categories.view",
+                          "contactMessages.delete",
+                          "contactMessages.update",
+                          "contactMessages.view",
+                          "coupons.create",
+                          "coupons.delete",
+                          "coupons.update",
+                          "coupons.view",
+                          "customers.update",
+                          "customers.view",
+                          "dashboard.view",
+                          "inventory.create",
+                          "inventory.update",
+                          "inventory.view",
+                          "invoices.create",
+                          "invoices.view",
+                          "orders.create",
+                          "orders.delete",
+                          "orders.paymentStatus",
+                          "orders.status",
+                          "orders.update",
+                          "orders.view",
+                          "orders.viewAll",
+                          "payments.update",
+                          "payments.view",
+                          "permissions.view",
+                          "products.create",
+                          "products.delete",
+                          "products.update",
+                          "products.view",
+                          "profile.update",
+                          "profile.view",
+                          "reports.view",
+                          "reviews.create",
+                          "reviews.delete",
+                          "reviews.update",
+                          "reviews.view",
+                          "roles.create",
+                          "roles.delete",
+                          "roles.status",
+                          "roles.update",
+                          "roles.view",
+                          "sales.view",
+                          "settings.update",
+                          "settings.view",
+                          "users.changeRole",
+                          "users.create",
+                          "users.delete",
+                          "users.update",
+                          "users.view",
+                          "wishlist.manage"
+                        ],
+                        "menu": [
+                          {
+                            "key": "dashboard",
+                            "label": "Dashboard",
+                            "path": "/admin-dashboard/dashboard",
+                            "permission": "dashboard.view"
+                          },
+                          {
+                            "key": "categories",
+                            "label": "Categories",
+                            "path": "/admin-dashboard/categories",
+                            "permission": "categories.view"
+                          },
+                          {
+                            "key": "products",
+                            "label": "Products",
+                            "path": "/admin-dashboard/products",
+                            "permission": "products.view"
+                          },
+                          {
+                            "key": "orders",
+                            "label": "Orders",
+                            "path": "/admin-dashboard/orders",
+                            "permission": "orders.viewAll"
+                          },
+                          {
+                            "key": "payments",
+                            "label": "Payments",
+                            "path": "/admin-dashboard/payments",
+                            "permission": "payments.view"
+                          },
+                          {
+                            "key": "invoices",
+                            "label": "Invoices",
+                            "path": "/admin-dashboard/invoices",
+                            "permission": "invoices.view"
+                          },
+                          {
+                            "key": "users",
+                            "label": "Users",
+                            "path": "/admin-dashboard/users",
+                            "permission": "users.view"
+                          },
+                          {
+                            "key": "contactMessages",
+                            "label": "Contact Messages",
+                            "path": "/admin-dashboard/contact-messages",
+                            "permission": "contactMessages.view"
+                          },
+                          {
+                            "key": "coupons",
+                            "label": "Coupons",
+                            "path": "/admin-dashboard/coupons",
+                            "permission": "coupons.view"
+                          },
+                          {
+                            "key": "reviews",
+                            "label": "Reviews",
+                            "path": "/admin-dashboard/reviews",
+                            "permission": "reviews.view"
+                          }
+                        ],
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature",
+                        "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature"
+                      }
+                    }
+                  },
+                  "Manager": {
+                    "summary": "Manager (products, categories, inventory, orders)",
+                    "value": {
+                      "success": true,
+                      "message": "Login successful",
+                      "data": {
+                        "user": {
+                          "_id": "6ab7778193bb757642b6f252",
+                          "fullName": "Manager Demo",
+                          "email": "manager.demo@example.com",
+                          "status": "ACTIVE",
+                          "role": {
+                            "_id": "6ab50f8d6273e1bbbd2e4bbd",
+                            "name": "Manager",
+                            "status": "ACTIVE"
+                          },
+                          "createdAt": "2026-09-26T07:42:57.434Z"
+                        },
+                        "permissions": [
+                          "brands.create",
+                          "brands.delete",
+                          "brands.update",
+                          "brands.view",
+                          "categories.create",
+                          "categories.delete",
+                          "categories.update",
+                          "categories.view",
+                          "customers.view",
+                          "dashboard.view",
+                          "inventory.create",
+                          "inventory.update",
+                          "inventory.view",
+                          "orders.update",
+                          "orders.view",
+                          "orders.viewAll",
+                          "products.create",
+                          "products.delete",
+                          "products.update",
+                          "products.view",
+                          "reports.view",
+                          "sales.view"
+                        ],
+                        "menu": [
+                          {
+                            "key": "dashboard",
+                            "label": "Dashboard",
+                            "path": "/admin-dashboard/dashboard",
+                            "permission": "dashboard.view"
+                          },
+                          {
+                            "key": "categories",
+                            "label": "Categories",
+                            "path": "/admin-dashboard/categories",
+                            "permission": "categories.view"
+                          },
+                          {
+                            "key": "products",
+                            "label": "Products",
+                            "path": "/admin-dashboard/products",
+                            "permission": "products.view"
+                          },
+                          {
+                            "key": "orders",
+                            "label": "Orders",
+                            "path": "/admin-dashboard/orders",
+                            "permission": "orders.viewAll"
+                          }
+                        ],
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature",
+                        "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature"
+                      }
+                    }
+                  },
+                  "Salesman": {
+                    "summary": "Salesman (sales and orders)",
+                    "value": {
+                      "success": true,
+                      "message": "Login successful",
+                      "data": {
+                        "user": {
+                          "_id": "6ab7778393bb757642b6f254",
+                          "fullName": "Salesman Demo",
+                          "email": "salesman.demo@example.com",
+                          "status": "ACTIVE",
+                          "role": {
+                            "_id": "6ab50f8e6273e1bbbd2e4bd3",
+                            "name": "Salesman",
+                            "status": "ACTIVE"
+                          },
+                          "createdAt": "2026-09-26T07:42:59.039Z"
+                        },
+                        "permissions": [
+                          "customers.view",
+                          "dashboard.view",
+                          "orders.create",
+                          "orders.update",
+                          "orders.view",
+                          "orders.viewAll",
+                          "products.view",
+                          "sales.view"
+                        ],
+                        "menu": [
+                          {
+                            "key": "dashboard",
+                            "label": "Dashboard",
+                            "path": "/admin-dashboard/dashboard",
+                            "permission": "dashboard.view"
+                          },
+                          {
+                            "key": "products",
+                            "label": "Products",
+                            "path": "/admin-dashboard/products",
+                            "permission": "products.view"
+                          },
+                          {
+                            "key": "orders",
+                            "label": "Orders",
+                            "path": "/admin-dashboard/orders",
+                            "permission": "orders.viewAll"
+                          }
+                        ],
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature",
+                        "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature"
+                      }
+                    }
+                  },
+                  "Customer": {
+                    "summary": "Customer (no dashboard menu)",
+                    "value": {
+                      "success": true,
+                      "message": "Login successful",
+                      "data": {
+                        "user": {
+                          "_id": "6ab7778093bb757642b6f250",
+                          "fullName": "Rahim Customer",
+                          "email": "customer.demo@example.com",
+                          "status": "ACTIVE",
+                          "role": {
+                            "_id": "6ab50f8e6273e1bbbd2e4bdb",
+                            "name": "Customer",
+                            "status": "ACTIVE"
+                          },
+                          "createdAt": "2026-09-26T07:42:56.022Z"
+                        },
+                        "permissions": [
+                          "cart.manage",
+                          "orders.create",
+                          "orders.view",
+                          "products.view",
+                          "profile.update",
+                          "profile.view",
+                          "reviews.create",
+                          "wishlist.manage"
+                        ],
+                        "menu": [],
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature",
+                        "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9.signature"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -203,7 +590,8 @@
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           }
-        }
+        },
+        "description": "Response depends on the role: permissions and the admin dashboard menu are returned for the logged-in user. Pick an example in the dropdown to see each role. The refresh token is also set as an httpOnly cookie (refreshToken)."
       }
     },
     "/api/auth/refresh-token": {
@@ -338,6 +726,84 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Edit my profile (name, phone, avatar, email)",
+        "description": "Any logged-in user, own account only.\n\n- Changing **email** needs `currentPassword`\n- The **password is never changed here**. To change it use forgot-password: an OTP is emailed, then set a new password with it\n- Role and status in the body are ignored\n\nReturns the same data as GET /api/auth/me.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Profile updated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/UserSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Not logged in, or wrong current password when changing email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "message": "Current password is incorrect"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email already used by another account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "message": "This email is already used by another account"
+                }
+              }
+            }
           }
         }
       }
@@ -992,6 +1458,48 @@
             "$ref": "#/components/responses/Conflict"
           }
         }
+      },
+      "put": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Edit a user (name, email, phone)",
+        "description": "**Permission:** `users.update`\n\nYou cannot edit yourself here (use PUT /api/auth/me) or a user who has permissions you do not have. Passwords are never set here. Logs `USER_UPDATED`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/UserDetail"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
       }
     },
     "/api/users/{id}/role": {
@@ -1193,7 +1701,8 @@
                 "ORDER_SHIPPED",
                 "ORDER_DELIVERED",
                 "ORDER_CANCELLED",
-                "PAYMENT_STATUS_CHANGED"
+                "PAYMENT_STATUS_CHANGED",
+                "USER_UPDATED"
               ]
             }
           },
@@ -1275,7 +1784,7 @@
           "Uploads"
         ],
         "summary": "Upload images and get their URLs",
-        "description": "**Permission:** any of `products.create`, `products.update`, `categories.create`, `categories.update`\n\nSelect up to 10 images (JPG, PNG, WEBP, GIF; max 5MB each). The real file content is checked, not just the extension. Put the returned URLs in `thumbnail`, `gallery` or category `imageUrl`.\n\nWithout Cloudinary settings in `.env`, images are saved in the server's `/uploads` folder (development only).",
+        "description": "**Permission:** any of `products.create`, `products.update`, `categories.create`, `categories.update`, `banners.create`, `banners.update`, `brands.create`, `brands.update`, `settings.update`\n\nSelect up to 10 images (JPG, PNG, WEBP, GIF; max 5MB each). The real file content is checked, not just the extension. Put the returned URLs in `thumbnail`, `gallery` or category `imageUrl`.\n\nWithout Cloudinary settings in `.env`, images are saved in the server's `/uploads` folder (development only).",
         "security": [
           {
             "bearerAuth": []
@@ -1290,7 +1799,10 @@
               "type": "string",
               "enum": [
                 "products",
-                "categories"
+                "categories",
+                "banners",
+                "brands",
+                "site"
               ],
               "default": "products"
             }
@@ -2330,7 +2842,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Product deleted successfully",
+            "description": "Deleted, or deactivated if the product has orders",
             "content": {
               "application/json": {
                 "schema": {
@@ -2352,6 +2864,18 @@
                         },
                         "productTitle": {
                           "type": "string"
+                        },
+                        "deleted": {
+                          "type": "boolean",
+                          "example": true,
+                          "description": "false = product had orders and was set INACTIVE instead"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "INACTIVE"
+                          ],
+                          "description": "Only when deleted is false"
                         }
                       }
                     }
@@ -2663,6 +3187,10 @@
                             "items": {
                               "type": "object"
                             }
+                          },
+                          "parentCategoryId": {
+                            "type": "string",
+                            "nullable": true
                           }
                         }
                       }
@@ -4113,6 +4641,1524 @@
           }
         }
       }
+    },
+    "/api/banners": {
+      "get": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "List all banners (active and inactive) in display order",
+        "description": "**Permission:** `banners.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "placement",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "HERO",
+                "PROMO"
+              ]
+            },
+            "description": "HERO = big banner, PROMO = promo cards"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Banners fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banners fetched successfully"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Banner"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Create a big banner (HERO) or a promo card (PROMO)",
+        "description": "**Permission:** `banners.create`\n\nUpload the image first with `POST /api/uploads/images?folder=banners`, then send its URL. Only imageUrl is required; placement defaults to HERO.\n\nOnly **2 promo cards** can be ACTIVE at once (409 otherwise). Save extra ones as INACTIVE and switch later.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BannerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Banner created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner created successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Banner"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/banners/reorder": {
+      "patch": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Set the display order of banners",
+        "description": "**Permission:** `banners.update`\n\nSend banner IDs in the order they should appear (first shows first). Order big banners and promo cards separately (400 if mixed).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": [
+                      "banner-id-2",
+                      "banner-id-1"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Banner order updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner order updated"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Banner"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/banners/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Banner ID",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Get a banner",
+        "description": "**Permission:** `banners.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Banner fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner fetched successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Banner"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Edit a banner",
+        "description": "**Permission:** `banners.update`\n\nSend only the fields to change. `\"\"` clears a text field. The image can be replaced but not removed.\n\nActivating a promo card (or moving a banner to PROMO) fails with 409 when 2 promo cards are already active.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BannerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Banner updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner updated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Banner"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Delete a banner",
+        "description": "**Permission:** `banners.delete`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Banner deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner deleted successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/banners/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Banner ID",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Banners"
+        ],
+        "summary": "Show or hide a banner",
+        "description": "**Permission:** `banners.update`\n\nINACTIVE banners are hidden from the website.\n\nActivating a promo card (or moving a banner to PROMO) fails with 409 when 2 promo cards are already active.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Banner deactivated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banner deactivated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Banner"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/brands": {
+      "get": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "List brands",
+        "description": "**Permission:** `brands.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search by name"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          },
+          {
+            "name": "featured",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "Only brands shown / not shown in Top Brands"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brands fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brands fetched successfully"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Brand"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Add a brand (name and logo are required)",
+        "description": "**Permission:** `brands.create`\n\nUpload the logo first with `POST /api/uploads/images?folder=brands`. Names are unique (case-insensitive).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Brand created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brand created successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Brand"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/brands/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Brand ID",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Get a brand",
+        "description": "**Permission:** `brands.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brand fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brand fetched successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Brand"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Edit a brand",
+        "description": "**Permission:** `brands.update`\n\nSend only the fields to change. Renaming keeps the slug unless a new slug is sent. The logo can be replaced but not removed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Brand updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brand updated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Brand"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Delete a brand",
+        "description": "**Permission:** `brands.delete`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brand deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brand deleted successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/brands/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Brand ID",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Brands"
+        ],
+        "summary": "Show or hide a brand",
+        "description": "**Permission:** `brands.update`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Brand deactivated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brand deactivated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Brand"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/settings/footer": {
+      "get": {
+        "tags": [
+          "Footer"
+        ],
+        "summary": "Get the footer (admin editor)",
+        "description": "**Permission:** `settings.view`\n\nAll fields are always present (empty strings / empty arrays until set).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Footer fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Footer fetched successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Footer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Footer"
+        ],
+        "summary": "Update the footer",
+        "description": "**Permission:** `settings.update`\n\nEverything is optional. Send only the parts to change; the rest is kept. For example `{ \"contact\": { \"phone\": \"01811111111\" } }` changes only the phone.\n\n- `\"\"` clears a field\n- `columns` replaces all columns (max 6 columns, 12 links each)\n- Social networks: facebook, instagram, youtube, tiktok, twitter, linkedin, whatsapp",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Footer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Footer updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Footer updated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Footer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/public/banners": {
+      "get": {
+        "tags": [
+          "Storefront"
+        ],
+        "summary": "Active big banners and promo cards for the landing page",
+        "description": "No login. Call with ?placement=HERO for the big banner/slider and ?placement=PROMO for the promo cards (max 2). Without the filter both are returned, each with its placement.",
+        "responses": {
+          "200": {
+            "description": "Banners fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Banners fetched successfully"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PublicBanner"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "parameters": [
+          {
+            "name": "placement",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "HERO",
+                "PROMO"
+              ]
+            },
+            "description": "HERO = big banner, PROMO = promo cards"
+          }
+        ]
+      }
+    },
+    "/api/public/brands": {
+      "get": {
+        "tags": [
+          "Storefront"
+        ],
+        "summary": "Active brands (Shop Top Brands)",
+        "description": "No login. Use `?featured=true` for the Top Brands section.",
+        "parameters": [
+          {
+            "name": "featured",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brands fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Brands fetched successfully"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PublicBrand"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/footer": {
+      "get": {
+        "tags": [
+          "Storefront"
+        ],
+        "summary": "Footer content for the website",
+        "description": "No login.",
+        "responses": {
+          "200": {
+            "description": "Footer fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Footer fetched successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Footer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/uploads/avatar": {
+      "post": {
+        "tags": [
+          "Uploads"
+        ],
+        "summary": "Upload my profile picture",
+        "description": "Any logged-in user. Send exactly one image in the `images` field (JPG, PNG, WEBP, GIF; max 5MB). It is saved to your profile right away.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "images"
+                ],
+                "properties": {
+                  "images": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Profile picture updated successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "avatarUrl": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/reports/sales": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Sales totals: today, yesterday, 7/14/30 days, 6 months, 1 year",
+        "description": "**Permission:** `sales.view`\n\nCounts **DELIVERED** orders (refunded ones excluded) on the day they were delivered, in Bangladesh time. `amount` = products + shipping - discount.\n\nPeriods include today: last 7 days = today + 6 days before. 1 month = 30 days, 6 months = 180 days, 1 year = 365 days.\n\n`ordersByStatus` = how many orders are in each status right now.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales summary fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Sales summary fetched successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "currency": {
+                          "type": "string",
+                          "example": "BDT"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "example": "Asia/Dhaka (UTC+6)"
+                        },
+                        "basis": {
+                          "type": "string"
+                        },
+                        "periods": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SalesPeriod"
+                          }
+                        },
+                        "ordersByStatus": {
+                          "type": "object",
+                          "properties": {
+                            "PENDING": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            },
+                            "CONFIRMED": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            },
+                            "PROCESSING": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            },
+                            "SHIPPED": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            },
+                            "DELIVERED": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            },
+                            "CANCELLED": {
+                              "type": "object",
+                              "properties": {
+                                "orders": {
+                                  "type": "integer"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/reports/sales/chart": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Sales chart data (per day or per month)",
+        "description": "**Permission:** `sales.view`\n\n`7d`, `14d`, `30d` give one point per day; `6m`, `1y` give one point per month. Days/months without sales are included with 0.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "14d",
+                "30d",
+                "6m",
+                "1y"
+              ],
+              "default": "7d"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales chart fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Sales chart fetched successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "range": {
+                          "type": "string",
+                          "example": "7d"
+                        },
+                        "groupBy": {
+                          "type": "string",
+                          "enum": [
+                            "day",
+                            "month"
+                          ]
+                        },
+                        "currency": {
+                          "type": "string",
+                          "example": "BDT"
+                        },
+                        "total": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number"
+                            },
+                            "orders": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "points": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "example": "2026-09-26",
+                                "description": "YYYY-MM-DD or YYYY-MM"
+                              },
+                              "amount": {
+                                "type": "number",
+                                "example": 2120
+                              },
+                              "orders": {
+                                "type": "integer",
+                                "example": 2
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/reports/payments": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Payments received and refunded per period",
+        "description": "**Permission:** `payments.view`\n\n`received` = orders with payment status PAID (by the day they were marked paid). `refunded` = REFUNDED orders. `outstanding` = money not collected yet (unpaid orders that are not cancelled), split by payment method.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payments summary fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Payments summary fetched successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "currency": {
+                          "type": "string",
+                          "example": "BDT"
+                        },
+                        "timezone": {
+                          "type": "string"
+                        },
+                        "periods": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/PaymentPeriod"
+                          }
+                        },
+                        "outstanding": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "number",
+                              "example": 3180
+                            },
+                            "orders": {
+                              "type": "integer",
+                              "example": 3
+                            },
+                            "byPaymentMethod": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "paymentMethod": {
+                                    "type": "string",
+                                    "example": "CASH_ON_DELIVERY"
+                                  },
+                                  "orders": {
+                                    "type": "integer"
+                                  },
+                                  "amount": {
+                                    "type": "number"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4538,10 +6584,12 @@
             "enum": [
               "ACTIVE",
               "INACTIVE"
-            ]
+            ],
+            "example": "ACTIVE"
           },
           "isProtected": {
-            "type": "boolean"
+            "type": "boolean",
+            "example": false
           }
         }
       },
@@ -4642,6 +6690,14 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "phone": {
+            "type": "string",
+            "example": "01911222333"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "example": ""
           }
         }
       },
@@ -4682,6 +6738,16 @@
               "email": {
                 "type": "string",
                 "example": "test@example.com"
+              },
+              "phone": {
+                "type": "string",
+                "example": "01712345678",
+                "description": "Empty string if not set"
+              },
+              "avatarUrl": {
+                "type": "string",
+                "example": "",
+                "description": "Empty string if not set"
               },
               "status": {
                 "type": "string",
@@ -4850,7 +6916,8 @@
               }
             }
           }
-        }
+        },
+        "description": "targetUserId, targetRoleId and targetOrderId are only present when the action relates to them"
       },
       "Pagination": {
         "type": "object",
@@ -5035,6 +7102,13 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "children": {
+            "type": "array",
+            "description": "Only with ?tree=true: nested sub-categories (same shape)",
+            "items": {
+              "type": "object"
+            }
           }
         }
       },
@@ -5322,7 +7396,6 @@
       },
       "StorefrontProduct": {
         "type": "object",
-        "description": "Same as Product but never includes stock or productCost",
         "properties": {
           "_id": {
             "type": "string"
@@ -5332,6 +7405,10 @@
             "example": "Premium Cotton T-Shirt"
           },
           "slug": {
+            "type": "string",
+            "example": "premium-cotton-t-shirt"
+          },
+          "productDescription": {
             "type": "string"
           },
           "categoryId": {
@@ -5341,9 +7418,13 @@
                 "type": "string"
               },
               "name": {
-                "type": "string"
+                "type": "string",
+                "example": "T-Shirt"
               },
               "slug": {
+                "type": "string"
+              },
+              "status": {
                 "type": "string"
               }
             }
@@ -5359,17 +7440,35 @@
           },
           "finalPrice": {
             "type": "number",
-            "example": 1100
+            "example": 1100,
+            "description": "Special price if set, else sell price"
           },
           "discountPercent": {
             "type": "integer",
             "example": 8
           },
+          "isFabric": {
+            "type": "boolean"
+          },
           "sizes": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "example": [
+              "M",
+              "L"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "nullable": true,
+            "example": "KG"
+          },
+          "quantity": {
+            "type": "number",
+            "nullable": true,
+            "example": 5
           },
           "thumbnail": {
             "type": "string"
@@ -5387,8 +7486,24 @@
               "OUT_OF_STOCK"
             ],
             "example": "IN_STOCK"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
-        }
+        },
+        "description": "Same as Product but never includes stock or productCost"
       },
       "AddToCartRequest": {
         "type": "object",
@@ -5841,6 +7956,31 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "confirmedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deliveredAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "refundedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           }
         }
       },
@@ -5989,6 +8129,584 @@
             "type": "string",
             "pattern": "^d{6}$",
             "example": "482913"
+          }
+        }
+      },
+      "Banner": {
+        "type": "object",
+        "properties": {
+          "placement": {
+            "type": "string",
+            "enum": [
+              "HERO",
+              "PROMO"
+            ],
+            "example": "HERO",
+            "description": "HERO = big banner (several = slider), PROMO = small promo card next to it (max 2 active)"
+          },
+          "_id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+          },
+          "mobileImageUrl": {
+            "type": "string",
+            "example": "",
+            "description": "Optional phone image; empty = use imageUrl"
+          },
+          "title": {
+            "type": "string",
+            "example": "Eid Sale"
+          },
+          "subtitle": {
+            "type": "string",
+            "example": "Up to 50% off"
+          },
+          "description": {
+            "type": "string",
+            "example": ""
+          },
+          "buttonText": {
+            "type": "string",
+            "example": "Shop now"
+          },
+          "buttonLink": {
+            "type": "string",
+            "example": "/shop?sale=eid"
+          },
+          "altText": {
+            "type": "string",
+            "example": "Eid sale banner"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "example": 0,
+            "description": "Lower shows first"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "example": "ACTIVE"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BannerRequest": {
+        "type": "object",
+        "required": [
+          "imageUrl"
+        ],
+        "description": "Only imageUrl is required when creating. On update send only the fields to change; send \"\" to clear a text field.",
+        "properties": {
+          "placement": {
+            "type": "string",
+            "enum": [
+              "HERO",
+              "PROMO"
+            ],
+            "example": "HERO",
+            "description": "HERO = big banner (several = slider), PROMO = small promo card next to it (max 2 active)",
+            "default": "HERO"
+          },
+          "imageUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+            "description": "Upload first with /api/uploads/images?folder=banners"
+          },
+          "mobileImageUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120,
+            "example": "Eid Sale"
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 200,
+            "example": "Up to 50% off"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "example": "Limited time offer"
+          },
+          "buttonText": {
+            "type": "string",
+            "maxLength": 40,
+            "example": "Shop now"
+          },
+          "buttonLink": {
+            "type": "string",
+            "example": "/shop?sale=eid",
+            "description": "A path like \"/shop\" or a full http(s) URL"
+          },
+          "altText": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "Eid sale banner"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999,
+            "description": "Default: after the last banner"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "default": "ACTIVE"
+          }
+        }
+      },
+      "PublicBanner": {
+        "type": "object",
+        "properties": {
+          "placement": {
+            "type": "string",
+            "enum": [
+              "HERO",
+              "PROMO"
+            ]
+          },
+          "_id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string"
+          },
+          "mobileImageUrl": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "buttonText": {
+            "type": "string"
+          },
+          "buttonLink": {
+            "type": "string"
+          },
+          "altText": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer"
+          }
+        }
+      },
+      "Brand": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "example": "Aarong"
+          },
+          "slug": {
+            "type": "string",
+            "example": "aarong"
+          },
+          "logoUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+          },
+          "description": {
+            "type": "string",
+            "example": ""
+          },
+          "link": {
+            "type": "string",
+            "example": "/brands/aarong"
+          },
+          "isFeatured": {
+            "type": "boolean",
+            "example": true,
+            "description": "Shown in Shop Top Brands"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "example": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "example": "ACTIVE"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BrandRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "logoUrl"
+        ],
+        "description": "name and logoUrl are required when creating. On update send only the fields to change.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "example": "Aarong"
+          },
+          "logoUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+            "description": "Upload first with /api/uploads/images?folder=brands"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Optional; made from the name if empty"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "example": "Bangladeshi fashion and handicrafts"
+          },
+          "link": {
+            "type": "string",
+            "example": "/brands/aarong",
+            "description": "A path like \"/shop\" or a full http(s) URL"
+          },
+          "isFeatured": {
+            "type": "boolean",
+            "default": true
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ],
+            "default": "ACTIVE"
+          }
+        }
+      },
+      "PublicBrand": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "logoUrl": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "isFeatured": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer"
+          }
+        }
+      },
+      "Footer": {
+        "type": "object",
+        "properties": {
+          "logoUrl": {
+            "type": "string",
+            "example": "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+          },
+          "aboutText": {
+            "type": "string",
+            "example": "GlobalShelfBD: quality products delivered across Bangladesh."
+          },
+          "contact": {
+            "type": "object",
+            "properties": {
+              "phone": {
+                "type": "string",
+                "example": "+8801712345678"
+              },
+              "email": {
+                "type": "string",
+                "example": "info@globalshelfbd.com"
+              },
+              "address": {
+                "type": "string",
+                "example": "House 12, Road 5, Dhanmondi, Dhaka"
+              }
+            }
+          },
+          "socialLinks": {
+            "type": "object",
+            "properties": {
+              "facebook": {
+                "type": "string",
+                "example": "https://facebook.com/globalshelfbd"
+              },
+              "instagram": {
+                "type": "string",
+                "example": ""
+              },
+              "youtube": {
+                "type": "string",
+                "example": ""
+              },
+              "tiktok": {
+                "type": "string",
+                "example": ""
+              },
+              "twitter": {
+                "type": "string",
+                "example": ""
+              },
+              "linkedin": {
+                "type": "string",
+                "example": ""
+              },
+              "whatsapp": {
+                "type": "string",
+                "example": ""
+              }
+            }
+          },
+          "columns": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "example": "Shop"
+                },
+                "links": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "example": "All products"
+                      },
+                      "url": {
+                        "type": "string",
+                        "example": "/shop"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "copyrightText": {
+            "type": "string",
+            "example": "© 2026 GlobalShelfBD. All rights reserved."
+          }
+        }
+      },
+      "UpdateProfileRequest": {
+        "type": "object",
+        "description": "Send only the fields to change. The password cannot be changed here (use forgot-password). Role and status are ignored.",
+        "properties": {
+          "fullName": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Rahim Uddin"
+          },
+          "phone": {
+            "type": "string",
+            "example": "01712345678",
+            "description": "Bangladeshi mobile number; \"\" clears it"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "example": "",
+            "description": "Image URL; \"\" removes it. Easier: POST /api/uploads/avatar"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "rahim.new@example.com"
+          },
+          "currentPassword": {
+            "type": "string",
+            "description": "Required only when changing email",
+            "example": "123456"
+          }
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "description": "Send only the fields to change. Passwords cannot be set here; users change their own password with forgot-password (email OTP). Role and status have their own endpoints.",
+        "properties": {
+          "fullName": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Karim Hossain"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "karim@example.com"
+          },
+          "phone": {
+            "type": "string",
+            "example": "01911222333",
+            "description": "Bangladeshi mobile number; \"\" clears it"
+          }
+        }
+      },
+      "SalesPeriod": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "today",
+              "yesterday",
+              "last7Days",
+              "last14Days",
+              "last30Days",
+              "last6Months",
+              "last1Year"
+            ],
+            "example": "today"
+          },
+          "label": {
+            "type": "string",
+            "example": "Today"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "amount": {
+            "type": "number",
+            "example": 4560,
+            "description": "Total incl. shipping"
+          },
+          "orders": {
+            "type": "integer",
+            "example": 3
+          },
+          "productSales": {
+            "type": "number",
+            "example": 4400
+          },
+          "shippingCost": {
+            "type": "number",
+            "example": 180
+          },
+          "discount": {
+            "type": "number",
+            "example": 0
+          }
+        }
+      },
+      "PaymentPeriod": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "today",
+              "yesterday",
+              "last7Days",
+              "last14Days",
+              "last30Days",
+              "last6Months",
+              "last1Year"
+            ],
+            "example": "today"
+          },
+          "label": {
+            "type": "string",
+            "example": "Today"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "received": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "example": 2260
+              },
+              "orders": {
+                "type": "integer",
+                "example": 1
+              }
+            }
+          },
+          "refunded": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "example": 0
+              },
+              "orders": {
+                "type": "integer",
+                "example": 0
+              }
+            }
+          },
+          "net": {
+            "type": "number",
+            "example": 2260
           }
         }
       }

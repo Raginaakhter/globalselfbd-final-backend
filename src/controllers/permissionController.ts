@@ -8,7 +8,7 @@ import Permission, { type IPermission } from "../models/Permission";
 // @route   GET /api/permissions
 // @access  permissions.view
 export const getPermissions = async (req: Request, res: Response) => {
-  const permissions = await Permission.find().sort({ module: 1, name: 1 }).lean();
+  const permissions = await Permission.find().select("-__v").sort({ module: 1, name: 1 }).lean();
 
   const grouped: Record<string, IPermission[]> = {};
   for (const permission of permissions) {

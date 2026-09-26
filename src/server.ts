@@ -25,17 +25,36 @@ import publicRoutes from "./routes/publicRoutes";
 import cartRoutes from "./routes/cartRoutes";
 import orderRoutes from "./routes/orderRoutes";
 import adminOrderRoutes from "./routes/adminOrderRoutes";
+import bannerRoutes from "./routes/bannerRoutes";
+import brandRoutes from "./routes/brandRoutes";
+import settingsRoutes from "./routes/settingsRoutes";
+import reportRoutes from "./routes/reportRoutes";
 
 // docs/ sits next to src/ and dist/, so this path works in dev and after build
 const swaggerDocument = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "docs", "swagger.json"), "utf8"));
 
 const app = express();
 
+// Behind a hosting proxy (Render, Railway, Nginx) set TRUST_PROXY=1 so each visitor's real IP
+// is used for rate limits and logs. Leave it unset when the app is reached directly.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set("trust proxy", Number.isInteger(hops) ? hops : process.env.TRUST_PROXY);
+}
+
 // ----- Middleware -----
+// Frontend URLs allowed to call the API, comma-separated in CLIENT_URL
+// (e.g. "http://localhost:5173,http://localhost:3000,https://globalshelfbd.com")
+const allowedOrigins = (process.env.CLIENT_URL || "")
+  .split(",")
+  .map((url) => url.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
-    credentials: true, // allow refresh token cookie
+    // Requests without an Origin header (Postman, server-to-server, Swagger on the same host) are allowed
+    origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)),
+    credentials: true, // allow the refresh token cookie
   })
 );
 app.use(express.json({ limit: "100kb" }));
@@ -62,6 +81,10 @@ app.use("/api/public", publicRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/admin/orders", adminOrderRoutes);
+app.use("/api/banners", bannerRoutes);
+app.use("/api/brands", brandRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/reports", reportRoutes);
 
 // Locally stored images (used only when Cloudinary is not configured)
 app.use(

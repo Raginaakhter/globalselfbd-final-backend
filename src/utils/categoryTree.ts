@@ -7,7 +7,7 @@ export type CategoryMap = Map<string, CategoryRecord>;
 
 // All categories in memory (category trees are small) for paths, cycles and counts
 export const loadCategoryMap = async (): Promise<CategoryMap> => {
-  const all = await Category.find().lean();
+  const all = await Category.find().select("-__v").lean();
   return new Map(all.map((c) => [String(c._id), c]));
 };
 
