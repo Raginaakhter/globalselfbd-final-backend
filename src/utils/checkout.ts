@@ -7,7 +7,8 @@ import { getVisibleCategoryIds } from "./categoryTree";
 import { getAvailability, getFinalPrice } from "./productView";
 import { quantitiesByProduct } from "./inventory";
 import { isNonEmptyString, normalizeBdPhone } from "./validators";
-import { PAYMENT_METHODS, SHIPPING, isPaymentMethod, type PaymentMethod } from "../config/orderOptions";
+import { PAYMENT_METHODS, isPaymentMethod, type PaymentMethod } from "../config/orderOptions";
+import { getShippingConfig, calculateShippingCharge } from "./shipping";
 import type { Size } from "../config/productOptions";
 
 export const roundMoney = (n: number): number => Math.round(n * 100) / 100;
@@ -71,13 +72,6 @@ export const productSnapshot = (product: ProductDocument): ProductSnapshot => ({
   customerSellPrice: product.customerSellPrice,
   customerSpecialPrice: product.customerSpecialPrice,
 });
-
-// Shipping cost from the city (Dhaka vs outside). Free above FREE_SHIPPING_MIN if set.
-export const calculateShipping = (city: string, subtotal: number): number => {
-  if (SHIPPING.FREE_SHIPPING_MIN > 0 && subtotal >= SHIPPING.FREE_SHIPPING_MIN) return 0;
-  const isDhaka = SHIPPING.DHAKA_CITIES.includes(String(city).trim().toLowerCase());
-  return isDhaka ? SHIPPING.INSIDE_DHAKA : SHIPPING.OUTSIDE_DHAKA;
-};
 
 export interface CartLine {
   item: CartItemDocument;
@@ -259,7 +253,7 @@ export const buildOrderDraft = async (customerId: Types.ObjectId, shippingInfo: 
 
   const subtotal = roundMoney(items.reduce((sum, i) => sum + i.subtotal, 0));
   const discount = 0; // coupons will set this later
-  const shippingCost = calculateShipping(shippingInfo.city, subtotal - discount);
+  const shippingCost = calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
   const totalAmount = roundMoney(subtotal - discount + shippingCost);
 
   const cartItemIds = lines.map(({ item }) => item._id);

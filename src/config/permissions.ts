@@ -23,6 +23,7 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   coupons: ["view", "create", "update", "delete"],
   reviews: ["view", "create", "update", "delete"],
   contactMessages: ["view", "update", "delete"],
+  newsletter: ["view", "delete", "send"],
   settings: ["view", "update"],
   profile: ["view", "update"],
   wishlist: ["manage"],

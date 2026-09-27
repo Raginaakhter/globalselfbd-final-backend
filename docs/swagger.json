@@ -78,11 +78,19 @@
     },
     {
       "name": "Footer",
-      "description": "Website footer content (admin)"
+      "description": "Website footer and delivery charges (admin settings)"
     },
     {
       "name": "Reports",
       "description": "Sales and payment totals for the admin dashboard (Bangladesh time)"
+    },
+    {
+      "name": "Newsletter",
+      "description": "Subscribe to our Newsletter form and subscriber list (marketing, not order emails)"
+    },
+    {
+      "name": "Contact",
+      "description": "Contact Us form and admin inbox"
     }
   ],
   "paths": {
@@ -5935,6 +5943,14 @@
                                   "type": "number"
                                 }
                               }
+                            },
+                            "productAmount": {
+                              "type": "number",
+                              "description": "Product price after discount (company income)"
+                            },
+                            "shippingCost": {
+                              "type": "number",
+                              "description": "Shipping charge (given to the shipping company)"
                             }
                           }
                         }
@@ -6026,6 +6042,14 @@
                             },
                             "orders": {
                               "type": "integer"
+                            },
+                            "productAmount": {
+                              "type": "number",
+                              "description": "Product price after discount (company income)"
+                            },
+                            "shippingCost": {
+                              "type": "number",
+                              "description": "Shipping charge (given to the shipping company)"
                             }
                           }
                         },
@@ -6046,6 +6070,14 @@
                               "orders": {
                                 "type": "integer",
                                 "example": 2
+                              },
+                              "productAmount": {
+                                "type": "number",
+                                "description": "Product price after discount (company income)"
+                              },
+                              "shippingCost": {
+                                "type": "number",
+                                "description": "Shipping charge (given to the shipping company)"
                               }
                             }
                           }
@@ -6141,6 +6173,14 @@
                                   }
                                 }
                               }
+                            },
+                            "productAmount": {
+                              "type": "number",
+                              "description": "Product price after discount (company money)"
+                            },
+                            "shippingCost": {
+                              "type": "number",
+                              "description": "Delivery charge (paid to the delivery company)"
                             }
                           }
                         }
@@ -6156,6 +6196,1960 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/public/shipping": {
+      "get": {
+        "tags": [
+          "Storefront"
+        ],
+        "summary": "Delivery charges (for cart and checkout pages)",
+        "description": "No login. Without parameters returns the charges. With `?city=` (and optional `?subtotal=` product total) it also returns `quote`: the exact charge for that city. The same rule is used when the order is placed.",
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "Sylhet"
+          },
+          {
+            "name": "subtotal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number"
+            },
+            "description": "Product total in BDT (for free-shipping check)",
+            "example": 1500
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery charges fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Delivery charges fetched successfully"
+                    },
+                    "data": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ShippingCharges"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "quote": {
+                              "type": "object",
+                              "description": "Only when city is sent",
+                              "properties": {
+                                "city": {
+                                  "type": "string",
+                                  "example": "Sylhet"
+                                },
+                                "area": {
+                                  "type": "string",
+                                  "enum": [
+                                    "INSIDE_DHAKA",
+                                    "OUTSIDE_DHAKA"
+                                  ]
+                                },
+                                "subtotal": {
+                                  "type": "number",
+                                  "example": 1500
+                                },
+                                "charge": {
+                                  "type": "number",
+                                  "example": 130
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "Charges only": {
+                    "value": {
+                      "success": true,
+                      "message": "Delivery charges fetched successfully",
+                      "data": {
+                        "currency": "BDT",
+                        "insideDhaka": 80,
+                        "outsideDhaka": 130,
+                        "freeShippingMinimum": 0,
+                        "rule": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka"
+                      }
+                    }
+                  },
+                  "Quote for Dhaka": {
+                    "value": {
+                      "success": true,
+                      "message": "Delivery charges fetched successfully",
+                      "data": {
+                        "currency": "BDT",
+                        "insideDhaka": 80,
+                        "outsideDhaka": 130,
+                        "freeShippingMinimum": 0,
+                        "rule": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka",
+                        "quote": {
+                          "city": "Dhaka",
+                          "area": "INSIDE_DHAKA",
+                          "subtotal": 1500,
+                          "charge": 80
+                        }
+                      }
+                    }
+                  },
+                  "Quote for Sylhet": {
+                    "value": {
+                      "success": true,
+                      "message": "Delivery charges fetched successfully",
+                      "data": {
+                        "currency": "BDT",
+                        "insideDhaka": 80,
+                        "outsideDhaka": 130,
+                        "freeShippingMinimum": 0,
+                        "rule": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka",
+                        "quote": {
+                          "city": "Sylhet",
+                          "area": "OUTSIDE_DHAKA",
+                          "subtotal": 1500,
+                          "charge": 130
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/settings/shipping": {
+      "get": {
+        "tags": [
+          "Footer"
+        ],
+        "summary": "Get delivery charges (admin)",
+        "description": "**Permission:** `settings.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery charges fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Delivery charges fetched successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ShippingCharges"
+                    }
+                  }
+                },
+                "examples": {
+                  "Current": {
+                    "value": {
+                      "success": true,
+                      "message": "Delivery charges fetched successfully",
+                      "data": {
+                        "currency": "BDT",
+                        "insideDhaka": 80,
+                        "outsideDhaka": 130,
+                        "freeShippingMinimum": 0,
+                        "rule": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Footer"
+        ],
+        "summary": "Change delivery charges (admin)",
+        "description": "**Permission:** `settings.update`\n\nSend only the values to change (0 to 10000 BDT). New orders use them right away; existing orders keep the charge they were placed with. `freeShippingMinimum: 0` turns free delivery off.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "insideDhaka": {
+                    "type": "number",
+                    "example": 80
+                  },
+                  "outsideDhaka": {
+                    "type": "number",
+                    "example": 130
+                  },
+                  "freeShippingMinimum": {
+                    "type": "number",
+                    "example": 3000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery charges updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Delivery charges updated successfully"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ShippingCharges"
+                    }
+                  }
+                },
+                "examples": {
+                  "Updated": {
+                    "value": {
+                      "success": true,
+                      "message": "Delivery charges updated successfully",
+                      "data": {
+                        "currency": "BDT",
+                        "insideDhaka": 90,
+                        "outsideDhaka": 130,
+                        "freeShippingMinimum": 3000,
+                        "rule": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/newsletter": {
+      "post": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Subscribe to the newsletter (website form)",
+        "description": "No login needed (if the customer is logged in, send the token and the subscription is linked to the account). Max 10 attempts per IP per 15 minutes.\n\nThe same message is returned whether the email is new or already subscribed. A previously unsubscribed email is subscribed again.",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "rahim@example.com"
+                  },
+                  "source": {
+                    "type": "string",
+                    "example": "footer",
+                    "description": "Optional: where the form is (lowercase letters, numbers, dashes). Default footer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Thanks for subscribing! You will get our news and offers.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Thanks for subscribing! You will get our news and offers.",
+                  "data": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/newsletter/unsubscribe": {
+      "post": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Unsubscribe (from the link in a newsletter email)",
+        "description": "No login. The token comes from the unsubscribe link in marketing emails. Calling it again is harmless.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "example": "48-character token from the email link"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "You have been unsubscribed from our newsletter",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "You have been unsubscribed from our newsletter",
+                  "data": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/newsletter/subscribers": {
+      "get": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "List subscribers (admin)",
+        "description": "**Permission:** `newsletter.view`\n\n`summary` gives the total subscribed/unsubscribed counts.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search by email"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SUBSCRIBED",
+                "UNSUBSCRIBED"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subscribers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Subscribers fetched successfully"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NewsletterSubscriber"
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "subscribed": {
+                          "type": "integer",
+                          "example": 120
+                        },
+                        "unsubscribed": {
+                          "type": "integer",
+                          "example": 4
+                        },
+                        "total": {
+                          "type": "integer",
+                          "example": 124
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/newsletter/subscribers/export": {
+      "get": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Download subscribers as CSV (admin)",
+        "description": "**Permission:** `newsletter.view`\n\nReturns a CSV file (not JSON): email, status, source, subscribedAt, unsubscribedAt. Use `?status=SUBSCRIBED` for the mailing list.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SUBSCRIBED",
+                "UNSUBSCRIBED"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV file download",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "email,status,source,subscribedAt,unsubscribedAt\n\"rahim@example.com\",\"SUBSCRIBED\",\"footer\",\"2026-09-27T10:00:00.000Z\",\"\""
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/newsletter/subscribers/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Delete a subscriber (admin)",
+        "description": "**Permission:** `newsletter.delete`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Subscriber deleted successfully",
+                  "data": {
+                    "_id": "6ab8...",
+                    "email": "rahim@example.com"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/newsletter/campaigns": {
+      "get": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "List email campaigns",
+        "description": "**Permission:** `newsletter.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DRAFT",
+                "SENDING",
+                "SENT",
+                "FAILED"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaigns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Campaign"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Campaigns fetched successfully",
+                      "data": [
+                        {
+                          "_id": "6ab8adcf9af901dffafd996d",
+                          "type": "NEW_PRODUCT",
+                          "subject": "New Eid collection is here",
+                          "heading": "Eid collection <b>2026</b>",
+                          "message": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!",
+                          "productIds": [
+                            "6ab8adca9af901dffafd9964",
+                            "6ab8adca9af901dffafd9965"
+                          ],
+                          "buttonText": "See all new arrivals",
+                          "buttonLink": "/shop?sort=newest",
+                          "status": "DRAFT",
+                          "recipients": 0,
+                          "sentCount": 0,
+                          "failedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "sentBy": null,
+                          "sentAt": null,
+                          "createdAt": "2026-09-27T05:46:55.420Z",
+                          "updatedAt": "2026-09-27T05:46:55.420Z"
+                        }
+                      ],
+                      "pagination": {
+                        "page": 1,
+                        "limit": 20,
+                        "total": 1,
+                        "totalPages": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Create a campaign draft (choose products to email)",
+        "description": "**Permission:** `newsletter.send`\n\nPick the email type, write the subject and message, and choose up to 6 ACTIVE products. Nothing is sent yet: preview it, send a test, then send.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Campaign draft created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Campaign draft created"
+                    },
+                    "data": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Campaign"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "products": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "_id": {
+                                    "type": "string"
+                                  },
+                                  "productTitle": {
+                                    "type": "string"
+                                  },
+                                  "slug": {
+                                    "type": "string"
+                                  },
+                                  "thumbnail": {
+                                    "type": "string"
+                                  },
+                                  "customerSellPrice": {
+                                    "type": "number"
+                                  },
+                                  "customerSpecialPrice": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "status": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Campaign draft created",
+                      "data": {
+                        "type": "NEW_PRODUCT",
+                        "subject": "New Eid collection is here",
+                        "heading": "Eid collection <b>2026</b>",
+                        "message": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!",
+                        "productIds": [
+                          "6ab8adca9af901dffafd9964",
+                          "6ab8adca9af901dffafd9965"
+                        ],
+                        "buttonText": "See all new arrivals",
+                        "buttonLink": "/shop?sort=newest",
+                        "status": "DRAFT",
+                        "recipients": 0,
+                        "sentCount": 0,
+                        "failedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentBy": null,
+                        "sentAt": null,
+                        "_id": "6ab8adcf9af901dffafd996d",
+                        "createdAt": "2026-09-27T05:46:55.420Z",
+                        "updatedAt": "2026-09-27T05:46:55.420Z",
+                        "products": [
+                          {
+                            "_id": "6ab8adca9af901dffafd9964",
+                            "productTitle": "Eid Panjabi",
+                            "slug": "eid-panjabi",
+                            "customerSellPrice": 2500,
+                            "customerSpecialPrice": 1990,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          },
+                          {
+                            "_id": "6ab8adca9af901dffafd9965",
+                            "productTitle": "Silk Saree",
+                            "slug": "silk-saree",
+                            "customerSellPrice": 4500,
+                            "customerSpecialPrice": null,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/newsletter/campaigns/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Get a campaign (also shows sending progress)",
+        "description": "**Permission:** `newsletter.view`\n\nWhile status is SENDING, `sentCount` and `failedCount` grow; poll this to show progress.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Campaign fetched successfully"
+                    },
+                    "data": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Campaign"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "products": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "_id": {
+                                    "type": "string"
+                                  },
+                                  "productTitle": {
+                                    "type": "string"
+                                  },
+                                  "slug": {
+                                    "type": "string"
+                                  },
+                                  "thumbnail": {
+                                    "type": "string"
+                                  },
+                                  "customerSellPrice": {
+                                    "type": "number"
+                                  },
+                                  "customerSpecialPrice": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "status": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Campaign fetched successfully",
+                      "data": {
+                        "_id": "6ab8adcf9af901dffafd996d",
+                        "type": "NEW_PRODUCT",
+                        "subject": "New Eid collection is here!",
+                        "heading": "Eid collection <b>2026</b>",
+                        "message": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!",
+                        "productIds": [
+                          "6ab8adca9af901dffafd9965",
+                          "6ab8adca9af901dffafd9964"
+                        ],
+                        "buttonText": "See all new arrivals",
+                        "buttonLink": "/shop?sort=newest",
+                        "status": "SENT",
+                        "recipients": 3,
+                        "sentCount": 3,
+                        "failedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentAt": "2026-09-27T05:47:00.930Z",
+                        "createdAt": "2026-09-27T05:46:55.420Z",
+                        "updatedAt": "2026-09-27T05:47:00.930Z",
+                        "products": [
+                          {
+                            "_id": "6ab8adca9af901dffafd9965",
+                            "productTitle": "Silk Saree",
+                            "slug": "silk-saree",
+                            "customerSellPrice": 4500,
+                            "customerSpecialPrice": null,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          },
+                          {
+                            "_id": "6ab8adca9af901dffafd9964",
+                            "productTitle": "Eid Panjabi",
+                            "slug": "eid-panjabi",
+                            "customerSellPrice": 2500,
+                            "customerSpecialPrice": 1990,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Edit a draft",
+        "description": "**Permission:** `newsletter.send`\n\nOnly DRAFT campaigns can be edited (409 otherwise).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Campaign updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Campaign updated"
+                    },
+                    "data": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Campaign"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "products": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "_id": {
+                                    "type": "string"
+                                  },
+                                  "productTitle": {
+                                    "type": "string"
+                                  },
+                                  "slug": {
+                                    "type": "string"
+                                  },
+                                  "thumbnail": {
+                                    "type": "string"
+                                  },
+                                  "customerSellPrice": {
+                                    "type": "number"
+                                  },
+                                  "customerSpecialPrice": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "status": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Campaign updated",
+                      "data": {
+                        "type": "NEW_PRODUCT",
+                        "subject": "New Eid collection is here!",
+                        "heading": "Eid collection <b>2026</b>",
+                        "message": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!",
+                        "productIds": [
+                          "6ab8adca9af901dffafd9965",
+                          "6ab8adca9af901dffafd9964"
+                        ],
+                        "buttonText": "See all new arrivals",
+                        "buttonLink": "/shop?sort=newest",
+                        "status": "DRAFT",
+                        "recipients": 0,
+                        "sentCount": 0,
+                        "failedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentBy": null,
+                        "sentAt": null,
+                        "_id": "6ab8adcf9af901dffafd996d",
+                        "createdAt": "2026-09-27T05:46:55.420Z",
+                        "updatedAt": "2026-09-27T05:46:56.444Z",
+                        "products": [
+                          {
+                            "_id": "6ab8adca9af901dffafd9965",
+                            "productTitle": "Silk Saree",
+                            "slug": "silk-saree",
+                            "customerSellPrice": 4500,
+                            "customerSpecialPrice": null,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          },
+                          {
+                            "_id": "6ab8adca9af901dffafd9964",
+                            "productTitle": "Eid Panjabi",
+                            "slug": "eid-panjabi",
+                            "customerSellPrice": 2500,
+                            "customerSpecialPrice": 1990,
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Delete a campaign",
+        "description": "**Permission:** `newsletter.send`\n\nNot allowed while it is SENDING.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Campaign deleted"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/newsletter/campaigns/{id}/preview": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Preview the email (HTML)",
+        "description": "**Permission:** `newsletter.view`\n\nReturns the exact email HTML. Show it in the admin panel with `<iframe srcdoc={html}>`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Campaign preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Campaign preview"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "subject": {
+                          "type": "string"
+                        },
+                        "html": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "products": {
+                          "type": "integer",
+                          "description": "Products shown"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Campaign preview",
+                      "data": {
+                        "subject": "New Eid collection is here!",
+                        "html": "\n<div style=\"background:#f3f5f4;padding:24px 12px;font-family:Arial,sans-serif\">\n  <table role=\"presentation\" width=\"100…",
+                        "text": "Eid collection <b>2026</b>\n\nFresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!\n\nSee all new arrivals: http://localhost:3000/shop?sort=newest\n\n- Silk Saree: ৳4,500 http://localhost:3000/product/silk-saree\n\n- Eid Panjabi: ৳1,990 http://localhost:3000/product/eid-panjabi\n\nUnsubscribe: http://localhost:3000/newsletter/unsubscribe?token=preview",
+                        "products": 2
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/newsletter/campaigns/{id}/test": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Send a test email",
+        "description": "**Permission:** `newsletter.send`\n\nSends one copy with [TEST] in the subject to `email`, or to your own account email if not given. Subscribers get nothing.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "ragina.dev@gmail.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test email sent to ragina.dev@gmail.com",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Test email sent to ragina.dev@gmail.com"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "to": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Test email sent to ragina.dev@gmail.com",
+                      "data": {
+                        "to": "ragina.dev@gmail.com"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/newsletter/campaigns/{id}/send": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Newsletter"
+        ],
+        "summary": "Send to all subscribers",
+        "description": "**Permission:** `newsletter.send`\n\nStarts sending in the background to every SUBSCRIBED email (batches of 100 through Resend) and returns right away with status SENDING. Each email has a personal unsubscribe link. A campaign can be sent only once; a second click returns 409. Poll GET /campaigns/{id} for progress; it ends as SENT (or FAILED if nothing could be sent).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sending started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Sending started"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Campaign"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Sending to 3 subscriber(s). Check the campaign for progress.",
+                      "data": {
+                        "_id": "6ab8adcf9af901dffafd996d",
+                        "type": "NEW_PRODUCT",
+                        "subject": "New Eid collection is here!",
+                        "heading": "Eid collection <b>2026</b>",
+                        "message": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!",
+                        "productIds": [
+                          "6ab8adca9af901dffafd9965",
+                          "6ab8adca9af901dffafd9964"
+                        ],
+                        "buttonText": "See all new arrivals",
+                        "buttonLink": "/shop?sort=newest",
+                        "status": "SENDING",
+                        "recipients": 3,
+                        "sentCount": 0,
+                        "failedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentBy": "6ab50f9aa10eae2c8f3953d3",
+                        "sentAt": null,
+                        "createdAt": "2026-09-27T05:46:55.420Z",
+                        "updatedAt": "2026-09-27T05:46:59.508Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/contact": {
+      "post": {
+        "tags": [
+          "Contact"
+        ],
+        "summary": "Send a message from the Contact Us form",
+        "description": "No login needed (if the customer is logged in, send the token and the message is linked to the account). Max 5 messages per IP per 15 minutes.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "email",
+                  "subject",
+                  "message"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 100,
+                    "example": "Rahim"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "rahim@example.com"
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "example": "01712-345678",
+                    "description": "Optional"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 150,
+                    "example": "Order question"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 3000,
+                    "example": "When will my Eid order arrive in Chattogram?"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Message received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "nullable": true
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Thank you! Your message has been received.",
+                      "data": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/contact-messages": {
+      "get": {
+        "tags": [
+          "Contact"
+        ],
+        "summary": "List contact messages (admin inbox)",
+        "description": "**Permission:** `contactMessages.view`\n\n`summary` gives the count of NEW / READ / REPLIED messages.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name, email, phone or subject"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NEW",
+                "READ",
+                "REPLIED"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ContactMessage"
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "new": {
+                          "type": "integer"
+                        },
+                        "read": {
+                          "type": "integer"
+                        },
+                        "replied": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Contact messages fetched successfully",
+                      "data": [
+                        {
+                          "_id": "6ab8cd022dd375aade72547f",
+                          "name": "Rahim",
+                          "email": "rahim@example.com",
+                          "phone": "",
+                          "subject": "Via website",
+                          "message": "When will my Eid order arrive in Chattogram?",
+                          "status": "NEW",
+                          "userId": null,
+                          "createdAt": "2026-09-27T08:00:02.105Z",
+                          "updatedAt": "2026-09-27T08:00:02.105Z"
+                        },
+                        {
+                          "_id": "6ab8ccff2dd375aade72547e",
+                          "name": "Rahim",
+                          "email": "rahim@example.com",
+                          "phone": "01712-345678",
+                          "subject": "Order question",
+                          "message": "When will my Eid order arrive in Chattogram?",
+                          "status": "NEW",
+                          "userId": null,
+                          "createdAt": "2026-09-27T07:59:59.132Z",
+                          "updatedAt": "2026-09-27T07:59:59.132Z"
+                        }
+                      ],
+                      "summary": {
+                        "new": 2,
+                        "read": 0,
+                        "replied": 0,
+                        "total": 2
+                      },
+                      "pagination": {
+                        "page": 1,
+                        "limit": 20,
+                        "total": 2,
+                        "totalPages": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/contact-messages/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Message ID"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Contact"
+        ],
+        "summary": "Mark a message as NEW, READ or REPLIED",
+        "description": "**Permission:** `contactMessages.update`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "NEW",
+                      "READ",
+                      "REPLIED"
+                    ],
+                    "example": "REPLIED"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ContactMessage"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Message marked as replied",
+                      "data": {
+                        "_id": "6ab8cd022dd375aade72547f",
+                        "name": "Rahim",
+                        "email": "rahim@example.com",
+                        "phone": "",
+                        "subject": "Via website",
+                        "message": "When will my Eid order arrive in Chattogram?",
+                        "status": "REPLIED",
+                        "userId": null,
+                        "createdAt": "2026-09-27T08:00:02.105Z",
+                        "updatedAt": "2026-09-27T08:00:04.183Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/contact-messages/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Message ID"
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Contact"
+        ],
+        "summary": "Delete a contact message",
+        "description": "**Permission:** `contactMessages.delete`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Message deleted successfully",
+                      "data": {
+                        "_id": "6ab8cd022dd375aade72547f"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -7704,7 +9698,7 @@
             "type": "string",
             "maxLength": 60,
             "example": "Dhaka",
-            "description": "Dhaka = 60 BDT shipping, other cities = 120 BDT"
+            "description": "Dhaka = 80 BDT shipping, other cities = 130 BDT"
           },
           "area": {
             "type": "string",
@@ -7850,11 +9844,11 @@
           },
           "shippingCost": {
             "type": "number",
-            "example": 60
+            "example": 80
           },
           "totalAmount": {
             "type": "number",
-            "example": 2260
+            "example": 2280
           },
           "paymentMethod": {
             "type": "string",
@@ -7902,11 +9896,11 @@
           },
           "shippingCost": {
             "type": "number",
-            "example": 60
+            "example": 80
           },
           "totalAmount": {
             "type": "number",
-            "example": 2260
+            "example": 2280
           },
           "paymentMethod": {
             "type": "string",
@@ -8110,6 +10104,17 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "subtotal": {
+            "type": "number",
+            "description": "Product price before discount"
+          },
+          "discount": {
+            "type": "number"
+          },
+          "shippingCost": {
+            "type": "number",
+            "description": "Delivery charge"
           }
         }
       },
@@ -8688,6 +10693,14 @@
               "orders": {
                 "type": "integer",
                 "example": 1
+              },
+              "productAmount": {
+                "type": "number",
+                "description": "Product price after discount (company money)"
+              },
+              "shippingCost": {
+                "type": "number",
+                "description": "Delivery charge (paid to the delivery company)"
               }
             }
           },
@@ -8701,12 +10714,326 @@
               "orders": {
                 "type": "integer",
                 "example": 0
+              },
+              "productAmount": {
+                "type": "number",
+                "description": "Product price after discount (company money)"
+              },
+              "shippingCost": {
+                "type": "number",
+                "description": "Delivery charge (paid to the delivery company)"
               }
             }
           },
           "net": {
             "type": "number",
             "example": 2260
+          },
+          "netSplit": {
+            "type": "object",
+            "properties": {
+              "productAmount": {
+                "type": "number",
+                "description": "Product price after discount (company money)"
+              },
+              "shippingCost": {
+                "type": "number",
+                "description": "Delivery charge (paid to the delivery company)"
+              }
+            }
+          }
+        }
+      },
+      "ShippingCharges": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "example": "BDT"
+          },
+          "insideDhaka": {
+            "type": "number",
+            "example": 80,
+            "description": "Charge when city is Dhaka"
+          },
+          "outsideDhaka": {
+            "type": "number",
+            "example": 130,
+            "description": "Charge for any other city"
+          },
+          "freeShippingMinimum": {
+            "type": "number",
+            "example": 0,
+            "description": "Product total at which delivery is free; 0 = never"
+          },
+          "rule": {
+            "type": "string",
+            "example": "City \"Dhaka\" = inside Dhaka; any other city = outside Dhaka"
+          }
+        }
+      },
+      "NewsletterSubscriber": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "example": "rahim@example.com"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SUBSCRIBED",
+              "UNSUBSCRIBED"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "example": "footer"
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Set when a logged-in customer subscribed"
+          },
+          "subscribedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unsubscribedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignRequest": {
+        "type": "object",
+        "required": [
+          "type",
+          "subject"
+        ],
+        "description": "Needs a message or at least one product. On update send only the fields to change (drafts only).",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "NEW_PRODUCT",
+              "OFFER",
+              "ANNOUNCEMENT"
+            ],
+            "example": "NEW_PRODUCT"
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "New Eid collection is here"
+          },
+          "heading": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "Eid collection 2026"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 3000,
+            "example": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!"
+          },
+          "productIds": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string"
+            },
+            "description": "ACTIVE products shown as cards, in this order"
+          },
+          "buttonText": {
+            "type": "string",
+            "maxLength": 40,
+            "example": "See all new arrivals"
+          },
+          "buttonLink": {
+            "type": "string",
+            "example": "/shop?sort=newest",
+            "description": "Path or full http(s) URL; set together with buttonText"
+          }
+        }
+      },
+      "Campaign": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "NEW_PRODUCT",
+              "OFFER",
+              "ANNOUNCEMENT"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "heading": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "productIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "buttonText": {
+            "type": "string"
+          },
+          "buttonLink": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "SENDING",
+              "SENT",
+              "FAILED"
+            ]
+          },
+          "recipients": {
+            "type": "integer",
+            "description": "Subscribers when sending started"
+          },
+          "sentCount": {
+            "type": "integer"
+          },
+          "failedCount": {
+            "type": "integer"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "sentBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CampaignUpdate": {
+        "type": "object",
+        "description": "Send only the fields to change. Only DRAFT campaigns can be edited.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "NEW_PRODUCT",
+              "OFFER",
+              "ANNOUNCEMENT"
+            ],
+            "example": "NEW_PRODUCT"
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "New Eid collection is here"
+          },
+          "heading": {
+            "type": "string",
+            "maxLength": 150,
+            "example": "Eid collection 2026"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 3000,
+            "example": "Fresh Panjabi and Saree for Eid.\n\nFree delivery in Dhaka this week!"
+          },
+          "productIds": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string"
+            },
+            "description": "ACTIVE products shown as cards, in this order"
+          },
+          "buttonText": {
+            "type": "string",
+            "maxLength": 40,
+            "example": "See all new arrivals"
+          },
+          "buttonLink": {
+            "type": "string",
+            "example": "/shop?sort=newest",
+            "description": "Path or full http(s) URL; set together with buttonText"
+          }
+        }
+      },
+      "ContactMessage": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NEW",
+              "READ",
+              "REPLIED"
+            ]
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Set when a logged-in customer sent it"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

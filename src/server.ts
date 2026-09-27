@@ -29,6 +29,8 @@ import bannerRoutes from "./routes/bannerRoutes";
 import brandRoutes from "./routes/brandRoutes";
 import settingsRoutes from "./routes/settingsRoutes";
 import reportRoutes from "./routes/reportRoutes";
+import newsletterRoutes from "./routes/newsletterRoutes";
+import { contactRouter, contactMessagesRouter } from "./routes/contactRoutes";
 
 // docs/ sits next to src/ and dist/, so this path works in dev and after build
 const swaggerDocument = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "docs", "swagger.json"), "utf8"));
@@ -85,6 +87,9 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/brands", brandRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/newsletter", newsletterRoutes);
+app.use("/api/contact", contactRouter);
+app.use("/api/contact-messages", contactMessagesRouter);
 
 // Locally stored images (used only when Cloudinary is not configured)
 app.use(

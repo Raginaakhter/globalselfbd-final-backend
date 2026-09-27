@@ -42,6 +42,40 @@ export const sendEmail = async ({ to, subject, html, text }: EmailMessage): Prom
   return result.id;
 };
 
+export interface BatchEmail extends EmailMessage {
+  headers?: Record<string, string>;
+}
+
+// Send up to 100 different emails in one request (Resend batch API).
+// Returns how many were accepted; a failed request counts all of its emails as failed.
+export const sendEmailBatch = async (messages: BatchEmail[]): Promise<{ sent: number; failed: number }> => {
+  if (messages.length === 0) return { sent: 0, failed: 0 };
+  const from = process.env.EMAIL_FROM || "GlobalShelfBD <onboarding@resend.dev>";
+  try {
+    const response = await fetch(`${RESEND_URL}/batch`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(
+        messages.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html, text: m.text, headers: m.headers }))
+      ),
+      signal: AbortSignal.timeout(30000),
+    });
+    const result = (await response.json().catch(() => ({}))) as { data?: { id: string }[]; message?: string };
+    if (!response.ok) {
+      console.error(`❌ Batch email failed (${response.status}):`, result.message || result);
+      return { sent: 0, failed: messages.length };
+    }
+    const sent = result.data?.length ?? messages.length;
+    return { sent, failed: messages.length - sent };
+  } catch (error) {
+    console.error("❌ Batch email failed:", (error as Error).message);
+    return { sent: 0, failed: messages.length };
+  }
+};
+
 // Simple branded layout shared by all emails
 export const emailLayout = (title: string, bodyHtml: string): string => `
 <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1f2937">

@@ -2,7 +2,7 @@ import express from "express";
 import { getPublicCategories, getPublicProducts, getPublicProduct } from "../controllers/publicController";
 import { getPublicBanners } from "../controllers/bannerController";
 import { getPublicBrands } from "../controllers/brandController";
-import { getPublicFooter } from "../controllers/settingsController";
+import { getPublicFooter, getPublicShipping } from "../controllers/settingsController";
 
 const router = express.Router();
 
@@ -15,5 +15,6 @@ router.get("/products/:slug", getPublicProduct);
 router.get("/banners", getPublicBanners);
 router.get("/brands", getPublicBrands);
 router.get("/footer", getPublicFooter);
+router.get("/shipping", getPublicShipping);
 
 export default router;

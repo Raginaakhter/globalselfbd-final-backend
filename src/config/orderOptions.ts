@@ -46,8 +46,8 @@ export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 // Shipping cost by city (BDT). Override in .env
 export const SHIPPING = {
-  INSIDE_DHAKA: Number(process.env.SHIPPING_COST_INSIDE_DHAKA) || 60,
-  OUTSIDE_DHAKA: Number(process.env.SHIPPING_COST_OUTSIDE_DHAKA) || 120,
+  INSIDE_DHAKA: Number(process.env.SHIPPING_COST_INSIDE_DHAKA) || 80,
+  OUTSIDE_DHAKA: Number(process.env.SHIPPING_COST_OUTSIDE_DHAKA) || 130,
   DHAKA_CITIES: ["dhaka"],
   // 0 = no free shipping
   FREE_SHIPPING_MIN: Number(process.env.FREE_SHIPPING_MIN_AMOUNT) || 0,

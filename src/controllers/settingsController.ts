@@ -7,7 +7,14 @@ import SiteSetting, {
 } from "../models/SiteSetting";
 import AppError from "../utils/AppError";
 import { isValidImageUrl } from "../utils/imageValidation";
-import { isValidLink, optionalText, optionalLink } from "../utils/validators";
+import { isValidLink, optionalText, optionalLink, queryString } from "../utils/validators";
+import {
+  SHIPPING_KEY,
+  getShippingConfig,
+  calculateShippingCharge,
+  isInsideDhaka,
+  type ShippingConfig,
+} from "../utils/shipping";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 
@@ -125,4 +132,83 @@ export const updateFooter = async (req: Request, res: Response) => {
 // @access  Public
 export const getPublicFooter = async (req: Request, res: Response) => {
   res.status(200).json({ success: true, message: "Footer fetched successfully", data: await loadFooter() });
+};
+
+// ---------- Delivery charges ----------
+
+const MAX_CHARGE = 10000;
+
+const parseCharge = (value: unknown, label: string): number => {
+  const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || n > MAX_CHARGE) {
+    throw new AppError(`${label} must be a number between 0 and ${MAX_CHARGE}`, 400);
+  }
+  return Math.round(n * 100) / 100;
+};
+
+const shippingResponse = (config: ShippingConfig) => ({
+  currency: "BDT",
+  insideDhaka: config.insideDhaka,
+  outsideDhaka: config.outsideDhaka,
+  freeShippingMinimum: config.freeShippingMinimum,
+  rule: 'City "Dhaka" = inside Dhaka; any other city = outside Dhaka',
+});
+
+// @desc    Delivery charges (admin editor)
+// @route   GET /api/settings/shipping
+// @access  settings.view
+export const getShipping = async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    message: "Delivery charges fetched successfully",
+    data: shippingResponse(await getShippingConfig()),
+  });
+};
+
+// @desc    Change delivery charges (send only the values to change). New orders use them right away.
+// @route   PUT /api/settings/shipping
+// @access  settings.update
+export const updateShipping = async (req: Request, res: Response) => {
+  const { insideDhaka, outsideDhaka, freeShippingMinimum } = (req.body || {}) as Body;
+  if (insideDhaka === undefined && outsideDhaka === undefined && freeShippingMinimum === undefined) {
+    throw new AppError("Send insideDhaka, outsideDhaka and/or freeShippingMinimum", 400);
+  }
+
+  const next = await getShippingConfig();
+  if (insideDhaka !== undefined) next.insideDhaka = parseCharge(insideDhaka, "insideDhaka");
+  if (outsideDhaka !== undefined) next.outsideDhaka = parseCharge(outsideDhaka, "outsideDhaka");
+  if (freeShippingMinimum !== undefined) {
+    next.freeShippingMinimum = parseCharge(freeShippingMinimum, "freeShippingMinimum");
+  }
+
+  await SiteSetting.findOneAndUpdate({ key: SHIPPING_KEY }, { $set: { value: next } }, { upsert: true });
+  res.status(200).json({ success: true, message: "Delivery charges updated successfully", data: shippingResponse(next) });
+};
+
+// @desc    Delivery charges for cart/checkout pages; ?city=Sylhet&subtotal=1500 also returns the charge
+// @route   GET /api/public/shipping
+// @access  Public
+export const getPublicShipping = async (req: Request, res: Response) => {
+  const config = await getShippingConfig();
+  const city = queryString(req.query.city);
+  const subtotalText = queryString(req.query.subtotal);
+
+  let quote: { city: string; area: "INSIDE_DHAKA" | "OUTSIDE_DHAKA"; subtotal: number; charge: number } | undefined;
+  if (city !== undefined) {
+    if (!city.trim()) throw new AppError("city cannot be empty", 400);
+    const subtotal = subtotalText === undefined ? 0 : Number(subtotalText);
+    if (!Number.isFinite(subtotal) || subtotal < 0) throw new AppError("subtotal must be a number of 0 or more", 400);
+    quote = {
+      city: city.trim(),
+      area: isInsideDhaka(city) ? "INSIDE_DHAKA" : "OUTSIDE_DHAKA",
+      subtotal,
+      charge: calculateShippingCharge(config, city, subtotal),
+    };
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Delivery charges fetched successfully",
+    data: { ...shippingResponse(config), ...(quote ? { quote } : {}) },
+  });
 };

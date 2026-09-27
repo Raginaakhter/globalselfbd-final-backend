@@ -104,15 +104,31 @@ export const getSalesSummary = async (req: Request, res: Response) => {
   const [sales, pipelineRows] = await Promise.all([
     totalsByPeriod({ orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } }, deliveredDate, periods),
     // Orders still in progress right now (not time based)
-    Order.aggregate<{ _id: string; orders: number; amount: number }>([
-      { $group: { _id: "$orderStatus", orders: { $sum: 1 }, amount: { $sum: "$totalAmount" } } },
+    Order.aggregate<{ _id: string; orders: number; amount: number; productAmount: number; shippingCost: number }>([
+      {
+        $group: {
+          _id: "$orderStatus",
+          orders: { $sum: 1 },
+          amount: { $sum: "$totalAmount" },
+          productAmount: { $sum: { $subtract: ["$subtotal", "$discount"] } },
+          shippingCost: { $sum: "$shippingCost" },
+        },
+      },
     ]),
   ]);
 
   const byStatus = Object.fromEntries(
     ORDER_STATUSES.map((s) => {
       const row = pipelineRows.find((r) => r._id === s);
-      return [s, { orders: row ? row.orders : 0, amount: row ? round(row.amount) : 0 }];
+      return [
+        s,
+        {
+          orders: row ? row.orders : 0,
+          amount: row ? round(row.amount) : 0,
+          productAmount: row ? round(row.productAmount) : 0,
+          shippingCost: row ? round(row.shippingCost) : 0,
+        },
+      ];
     })
   );
 
@@ -138,11 +154,26 @@ export const getPaymentsSummary = async (req: Request, res: Response) => {
     totalsByPeriod({ paymentStatus: "PAID" }, paidDate, periods),
     totalsByPeriod({ paymentStatus: "REFUNDED" }, refundedDate, periods),
     // Money not collected yet (unpaid orders that are not cancelled)
-    Order.aggregate<{ _id: string; orders: number; amount: number }>([
+    Order.aggregate<{ _id: string; orders: number; amount: number; productAmount: number; shippingCost: number }>([
       { $match: { paymentStatus: { $in: ["PENDING", "FAILED"] }, orderStatus: { $ne: "CANCELLED" } } },
-      { $group: { _id: "$paymentMethod", orders: { $sum: 1 }, amount: { $sum: "$totalAmount" } } },
+      {
+        $group: {
+          _id: "$paymentMethod",
+          orders: { $sum: 1 },
+          amount: { $sum: "$totalAmount" },
+          productAmount: { $sum: { $subtract: ["$subtotal", "$discount"] } },
+          shippingCost: { $sum: "$shippingCost" },
+        },
+      },
     ]),
   ]);
+
+  // Product money (after discount) belongs to the company; the delivery charge goes to the delivery company
+  const split = (t: { productSales: number; discount: number; shippingCost: number }) => ({
+    productAmount: round(t.productSales - t.discount),
+    shippingCost: round(t.shippingCost),
+  });
+  const sum = (key: "amount" | "productAmount" | "shippingCost") => round(pending.reduce((total, r) => total + r[key], 0));
 
   res.status(200).json({
     success: true,
@@ -155,13 +186,19 @@ export const getPaymentsSummary = async (req: Request, res: Response) => {
         label: p.label,
         from: p.from,
         to: p.to,
-        received: { amount: p.amount, orders: p.orders },
-        refunded: { amount: refunded[i].amount, orders: refunded[i].orders },
+        received: { amount: p.amount, orders: p.orders, ...split(p) },
+        refunded: { amount: refunded[i].amount, orders: refunded[i].orders, ...split(refunded[i]) },
         net: round(p.amount - refunded[i].amount),
+        netSplit: {
+          productAmount: round(split(p).productAmount - split(refunded[i]).productAmount),
+          shippingCost: round(p.shippingCost - refunded[i].shippingCost),
+        },
       })),
       outstanding: {
-        amount: round(pending.reduce((sum, r) => sum + r.amount, 0)),
-        orders: pending.reduce((sum, r) => sum + r.orders, 0),
+        amount: sum("amount"),
+        orders: pending.reduce((total, r) => total + r.orders, 0),
+        productAmount: sum("productAmount"),
+        shippingCost: sum("shippingCost"),
         byPaymentMethod: pending.map((r) => ({ paymentMethod: r._id, orders: r.orders, amount: round(r.amount) })),
       },
     },
@@ -198,7 +235,7 @@ export const getSalesChart = async (req: Request, res: Response) => {
   if (!config) throw new AppError(`range must be one of: ${Object.keys(RANGES).join(", ")}`, 400);
 
   const from = startOfBdDay(config.days - 1);
-  const rows = await Order.aggregate<{ _id: string; amount: number; orders: number }>([
+  const rows = await Order.aggregate<{ _id: string; amount: number; productAmount: number; shippingCost: number; orders: number }>([
     { $match: { orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } } },
     { $addFields: { reportDate: deliveredDate } },
     { $match: { reportDate: { $gte: from } } },
@@ -208,6 +245,8 @@ export const getSalesChart = async (req: Request, res: Response) => {
           $dateToString: { date: "$reportDate", format: config.unit === "day" ? "%Y-%m-%d" : "%Y-%m", timezone: BD_TIMEZONE },
         },
         amount: { $sum: "$totalAmount" },
+        productAmount: { $sum: { $subtract: ["$subtotal", "$discount"] } },
+        shippingCost: { $sum: "$shippingCost" },
         orders: { $sum: 1 },
       },
     },
@@ -216,8 +255,11 @@ export const getSalesChart = async (req: Request, res: Response) => {
   const points = bucketLabels(from, config.unit).map((label) => ({
     label,
     amount: round(byLabel.get(label)?.amount || 0),
+    productAmount: round(byLabel.get(label)?.productAmount || 0),
+    shippingCost: round(byLabel.get(label)?.shippingCost || 0),
     orders: byLabel.get(label)?.orders || 0,
   }));
+  const sumOf = (key: "amount" | "productAmount" | "shippingCost") => round(points.reduce((total, p) => total + p[key], 0));
 
   res.status(200).json({
     success: true,
@@ -226,7 +268,12 @@ export const getSalesChart = async (req: Request, res: Response) => {
       range,
       groupBy: config.unit,
       currency: "BDT",
-      total: { amount: round(points.reduce((s, p) => s + p.amount, 0)), orders: points.reduce((s, p) => s + p.orders, 0) },
+      total: {
+        amount: sumOf("amount"),
+        productAmount: sumOf("productAmount"),
+        shippingCost: sumOf("shippingCost"),
+        orders: points.reduce((total, p) => total + p.orders, 0),
+      },
       points,
     },
   });
