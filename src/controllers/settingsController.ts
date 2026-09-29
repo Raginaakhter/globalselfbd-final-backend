@@ -27,7 +27,7 @@ const LIMITS = { ABOUT: 1000, PHONE: 30, ADDRESS: 300, COPYRIGHT: 200, COLUMNS: 
 const isObject = (v: unknown): v is Body => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // Stored footer merged over the defaults, so every field is always present
-const loadFooter = async (): Promise<FooterContent> => {
+export const loadFooter = async (): Promise<FooterContent> => {
   const doc = await SiteSetting.findOne({ key: FOOTER_KEY }).lean();
   const saved = (doc?.value || {}) as Partial<FooterContent>;
   const base = emptyFooter();

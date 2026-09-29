@@ -20,6 +20,9 @@ export interface IProduct {
   thumbnail: string;
   gallery: string[];
   status: Status;
+  // From APPROVED reviews only; kept up to date when a review is approved/hidden/deleted
+  ratingAverage: number;
+  ratingCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -108,6 +111,8 @@ const productSchema = new Schema<IProduct>(
       default: "ACTIVE",
       index: true,
     },
+    ratingAverage: { type: Number, default: 0, min: 0, max: 5 },
+    ratingCount: { type: Number, default: 0, min: 0 },
   },
   {
     timestamps: true,

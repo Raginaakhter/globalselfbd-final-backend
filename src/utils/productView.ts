@@ -63,6 +63,8 @@ export const toProductResponse = (
     thumbnail: p.thumbnail,
     gallery: p.gallery,
     availability: getAvailability(p.stock),
+    // Approved reviews only (for the product card and details page)
+    rating: { averageRating: p.ratingAverage ?? 0, totalReviews: p.ratingCount ?? 0 },
     status: p.status,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,

@@ -4,9 +4,10 @@ import OrderItem from "../models/OrderItem";
 import User from "../models/User";
 import AppError from "../utils/AppError";
 import { logActivity } from "../utils/activityLog";
+import { issueInvoiceQuietly } from "../utils/invoices";
 import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryString } from "../utils/validators";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
-import { notifyOrderEvent } from "../utils/orderEmails";
+import { notifyOrderEvent, notifyReviewRequest } from "../utils/orderEmails";
 import {
   ORDER_STATUS,
   ORDER_STATUSES,
@@ -28,9 +29,10 @@ const statusTimestamp = (status: OrderStatus): Record<string, Date> => {
   const field = ({ CONFIRMED: "confirmedAt", SHIPPED: "shippedAt", DELIVERED: "deliveredAt" } as Partial<Record<OrderStatus, string>>)[status];
   return field ? { [field]: new Date() } : {};
 };
-const paymentTimestamp = (status: PaymentStatus): Record<string, Date | null> => {
-  if (status === "PAID") return { paidAt: new Date(), refundedAt: null };
-  if (status === "REFUNDED") return { refundedAt: new Date() };
+// A refund gives back only the product price (after discount): the delivery charge has gone to the shipping company
+const paymentTimestamp = (status: PaymentStatus, order: { subtotal: number; discount: number }): Record<string, Date | number | null> => {
+  if (status === "PAID") return { paidAt: new Date(), refundedAt: null, refundAmount: 0 };
+  if (status === "REFUNDED") return { refundedAt: new Date(), refundAmount: Math.round((order.subtotal - order.discount) * 100) / 100 };
   return {};
 };
 
@@ -197,8 +199,13 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     });
   }
 
+  // A confirmed order gets its invoice automatically
+  if (status === ORDER_STATUS.CONFIRMED) await issueInvoiceQuietly(updated);
+
   const items = await OrderItem.find({ orderId: order._id }).lean();
   if (status !== ORDER_STATUS.PENDING) notifyOrderEvent(status, updated, items);
+  // Delivered: ask the customer to rate the products they bought
+  if (status === ORDER_STATUS.DELIVERED) notifyReviewRequest(updated, items);
   res.status(200).json({
     success: true,
     message: `Order status updated to ${status}`,
@@ -228,7 +235,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
 
   const updated = await Order.findOneAndUpdate(
     { _id: order._id, paymentStatus: from },
-    { $set: { paymentStatus, ...paymentTimestamp(paymentStatus) } },
+    { $set: { paymentStatus, ...paymentTimestamp(paymentStatus, order) } },
     { returnDocument: "after" }
   );
   if (!updated) throw new AppError("Payment status was changed by someone else. Please reload", 409);
@@ -238,7 +245,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     targetOrderId: order._id,
     targetUserId: order.customerId,
     oldValue: { paymentStatus: from },
-    newValue: { paymentStatus },
+    newValue: paymentStatus === "REFUNDED" ? { paymentStatus, refundAmount: updated.refundAmount } : { paymentStatus },
   });
 
   const items = await OrderItem.find({ orderId: order._id }).lean();

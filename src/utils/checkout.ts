@@ -10,6 +10,7 @@ import { isNonEmptyString, normalizeBdPhone } from "./validators";
 import { PAYMENT_METHODS, isPaymentMethod, type PaymentMethod } from "../config/orderOptions";
 import { getShippingConfig, calculateShippingCharge } from "./shipping";
 import type { Size } from "../config/productOptions";
+import { evaluateCoupon, type AppliedCoupon } from "./coupons";
 
 export const roundMoney = (n: number): number => Math.round(n * 100) / 100;
 
@@ -219,13 +220,18 @@ export interface OrderDraft {
   items: DraftItem[];
   subtotal: number;
   discount: number;
+  coupon: AppliedCoupon | null;
   shippingCost: number;
   totalAmount: number;
   shippingInfo: ShippingInfo;
 }
 
 // Validate the whole cart for checkout and calculate totals (prices from the database only)
-export const buildOrderDraft = async (customerId: Types.ObjectId, shippingInfo: ShippingInfo): Promise<OrderDraft> => {
+export const buildOrderDraft = async (
+  customerId: Types.ObjectId,
+  shippingInfo: ShippingInfo,
+  couponCode: string | null = null
+): Promise<OrderDraft> => {
   const { cart, lines } = await loadCart(customerId);
   if (lines.length === 0) throw new AppError("Your cart is empty", 400);
 
@@ -252,10 +258,19 @@ export const buildOrderDraft = async (customerId: Types.ObjectId, shippingInfo: 
   });
 
   const subtotal = roundMoney(items.reduce((sum, i) => sum + i.subtotal, 0));
-  const discount = 0; // coupons will set this later
+  // Optional coupon: the discount is on the product price only, never on the delivery charge
+  const coupon = couponCode
+    ? await evaluateCoupon(
+        couponCode,
+        customerId,
+        lines.map(({ item, product }) => ({ productId: item.productId, categoryId: (product as ProductDocument).categoryId, subtotal: item.subtotal })),
+        subtotal
+      )
+    : null;
+  const discount = coupon ? coupon.discount : 0;
   const shippingCost = calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
   const totalAmount = roundMoney(subtotal - discount + shippingCost);
 
   const cartItemIds = lines.map(({ item }) => item._id);
-  return { cart, cartItemIds, items, subtotal, discount, shippingCost, totalAmount, shippingInfo };
+  return { cart, cartItemIds, items, subtotal, discount, coupon, shippingCost, totalAmount, shippingInfo };
 };

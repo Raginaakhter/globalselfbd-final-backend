@@ -2,6 +2,7 @@ import mongoose, { type Types } from "mongoose";
 import Order, { type IOrder, type OrderDocument } from "../models/Order";
 import OrderItem, { type IOrderItem } from "../models/OrderItem";
 import AppError from "./AppError";
+import { releaseCoupon } from "./coupons";
 import { restoreStock, quantitiesByProduct } from "./inventory";
 import { CANCELLABLE_STATUSES, ORDER_STATUS } from "../config/orderOptions";
 
@@ -65,11 +66,14 @@ export const toOrderResponse = (
     totalQuantity: items.reduce((sum, i) => sum + i.quantity, 0),
     subtotal: o.subtotal,
     discount: o.discount,
+    couponCode: o.couponCode ?? null,
     shippingCost: o.shippingCost,
     totalAmount: o.totalAmount,
     paymentMethod: o.paymentMethod,
     paymentStatus: o.paymentStatus,
     orderStatus: o.orderStatus,
+    // The customer may still cancel it (the backend checks this again on cancel)
+    canCancel: CANCELLABLE_STATUSES.includes(o.orderStatus),
     shippingInformation: {
       name: o.shippingName,
       phone: o.shippingPhone,
@@ -85,6 +89,8 @@ export const toOrderResponse = (
     deliveredAt: o.deliveredAt ?? null,
     paidAt: o.paidAt ?? null,
     refundedAt: o.refundedAt ?? null,
+    // Product price given back; the delivery charge is never refunded
+    refundAmount: o.refundAmount ?? 0,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
     ...(customer !== undefined
@@ -116,6 +122,7 @@ export const cancelOrder = async (order: OrderDocument): Promise<OrderDocument> 
       for (const [productId, quantity] of quantitiesByProduct(items)) {
         await restoreStock(productId, quantity, session);
       }
+      await releaseCoupon(order._id, session);
     });
   } finally {
     await session.endSession();

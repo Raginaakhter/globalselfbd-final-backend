@@ -61,12 +61,24 @@
       "description": "Customer's own cart (prices always calculated by the backend)"
     },
     {
+      "name": "Coupons",
+      "description": "Discount coupons (admin) and applying a code at checkout"
+    },
+    {
       "name": "Orders",
       "description": "Customer checkout, order history and cancel (own orders only)"
     },
     {
       "name": "Admin Orders",
       "description": "Admin panel: all customer orders, status and payment status"
+    },
+    {
+      "name": "Invoices",
+      "description": "One invoice per order (created when the order is confirmed)"
+    },
+    {
+      "name": "Reviews",
+      "description": "Verified-purchase reviews, moderation, homepage carousel and product ratings"
     },
     {
       "name": "Banners",
@@ -4036,7 +4048,7 @@
           "Orders"
         ],
         "summary": "Cancel one of my orders",
-        "description": "**Permission:** `orders.create` (own orders only)\n\nAllowed while the order is PENDING, CONFIRMED or PROCESSING. Stock is restored exactly once (cancelling again is rejected).",
+        "description": "**Login required**, own orders only (another customer's order looks not found). Allowed while the order is PENDING, CONFIRMED or PROCESSING (checked by the backend); SHIPPED / DELIVERED / CANCELLED return 400. Stock is restored, a coupon use is given back, ORDER_CANCELLED is logged and a cancellation email is sent. Order responses have `canCancel` to show or hide the button.",
         "security": [
           {
             "bearerAuth": []
@@ -4445,7 +4457,7 @@
           "Admin Orders"
         ],
         "summary": "Update payment status (separate from order status)",
-        "description": "**Permission:** `orders.paymentStatus`\n\nAllowed: PENDING → PAID or FAILED · FAILED → PENDING or PAID · PAID → REFUNDED. REFUNDED is final. Logs `PAYMENT_STATUS_CHANGED`.",
+        "description": "**Permission:** `orders.paymentStatus`\n\nAllowed: PENDING → PAID or FAILED · FAILED → PENDING or PAID · PAID → REFUNDED. REFUNDED is final. Logs `PAYMENT_STATUS_CHANGED`.\n\n**REFUNDED** gives back only the product price (subtotal - discount), saved as refundAmount. The delivery charge is not refunded.",
         "security": [
           {
             "bearerAuth": []
@@ -5833,7 +5845,7 @@
           "Reports"
         ],
         "summary": "Sales totals: today, yesterday, 7/14/30 days, 6 months, 1 year",
-        "description": "**Permission:** `sales.view`\n\nCounts **DELIVERED** orders (refunded ones excluded) on the day they were delivered, in Bangladesh time. `amount` = products + shipping - discount.\n\nPeriods include today: last 7 days = today + 6 days before. 1 month = 30 days, 6 months = 180 days, 1 year = 365 days.\n\n`ordersByStatus` = how many orders are in each status right now.",
+        "description": "**Permission:** `sales.view`\n\nCounts **DELIVERED** orders (refunded ones excluded) on the day they were delivered, in Bangladesh time. `amount` = products + shipping - discount.\n\nPeriods include today: last 7 days = today + 6 days before. 1 month = 30 days, 6 months = 180 days, 1 year = 365 days.\n\n`ordersByStatus` = how many orders are in each status right now.\n\nDelivered orders. A refunded order counts its delivery charge only (its product price was given back); refundedOrders tells how many.",
         "security": [
           {
             "bearerAuth": []
@@ -8153,6 +8165,3017 @@
           }
         }
       }
+    },
+    "/api/coupons": {
+      "get": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "List coupons",
+        "description": "**Permission:** `coupons.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Code or description"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "INACTIVE",
+                "SCHEDULED",
+                "EXPIRED",
+                "USED_UP"
+              ],
+              "description": "Worked out from status + dates + usage"
+            }
+          },
+          {
+            "name": "discountType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PERCENTAGE",
+                "FIXED"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest",
+                "expiring",
+                "mostUsed",
+                "code"
+              ],
+              "default": "newest"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coupons",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Coupon"
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupons fetched successfully",
+                      "data": [
+                        {
+                          "_id": "6ab9f7cea086d0d565d8de7c",
+                          "code": "PAUSED5",
+                          "description": "",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 10,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "INACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:54.732Z",
+                          "updatedAt": "2026-09-28T05:14:54.732Z",
+                          "__v": 0,
+                          "state": "INACTIVE",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7cea086d0d565d8de7b",
+                          "code": "OLD10",
+                          "description": "",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 10,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-18T05:14:53.481Z",
+                          "expiresAt": "2026-09-27T05:14:53.481Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:54.126Z",
+                          "updatedAt": "2026-09-28T05:14:54.126Z",
+                          "__v": 0,
+                          "state": "EXPIRED",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7cda086d0d565d8de7a",
+                          "code": "PUJA15",
+                          "description": "",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 10,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-29T05:14:51.830Z",
+                          "expiresAt": "2026-10-08T05:14:51.830Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:53.348Z",
+                          "updatedAt": "2026-09-28T05:14:53.348Z",
+                          "__v": 0,
+                          "state": "SCHEDULED",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7cba086d0d565d8de79",
+                          "code": "FIRST50",
+                          "description": "",
+                          "discountType": "FIXED",
+                          "discountValue": 50,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": 1,
+                          "perUserLimit": null,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:51.724Z",
+                          "updatedAt": "2026-09-28T05:14:51.724Z",
+                          "__v": 0,
+                          "state": "ACTIVE",
+                          "remainingUses": 1
+                        },
+                        {
+                          "_id": "6ab9f7cba086d0d565d8de78",
+                          "code": "BIG5000",
+                          "description": "",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 10,
+                          "minOrderAmount": 5000,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:51.412Z",
+                          "updatedAt": "2026-09-28T05:14:51.412Z",
+                          "__v": 0,
+                          "state": "ACTIVE",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7cba086d0d565d8de77",
+                          "code": "FASHION50",
+                          "description": "",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 50,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "CATEGORIES",
+                          "categoryIds": [
+                            "6ab9f7c3a086d0d565d8de70"
+                          ],
+                          "productIds": [],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:51.081Z",
+                          "updatedAt": "2026-09-28T05:14:51.081Z",
+                          "__v": 0,
+                          "state": "ACTIVE",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7caa086d0d565d8de76",
+                          "code": "LOTION200",
+                          "description": "",
+                          "discountType": "FIXED",
+                          "discountValue": 200,
+                          "minOrderAmount": null,
+                          "maxDiscount": null,
+                          "usageLimit": null,
+                          "perUserLimit": null,
+                          "scope": "PRODUCTS",
+                          "categoryIds": [],
+                          "productIds": [
+                            "6ab9f7c5a086d0d565d8de73"
+                          ],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:50.710Z",
+                          "updatedAt": "2026-09-28T05:14:50.710Z",
+                          "__v": 0,
+                          "state": "ACTIVE",
+                          "remainingUses": null
+                        },
+                        {
+                          "_id": "6ab9f7caa086d0d565d8de74",
+                          "code": "EID10",
+                          "description": "10% off everything",
+                          "discountType": "PERCENTAGE",
+                          "discountValue": 10,
+                          "minOrderAmount": 500,
+                          "maxDiscount": 120,
+                          "usageLimit": null,
+                          "perUserLimit": 1,
+                          "scope": "ENTIRE_ORDER",
+                          "categoryIds": [],
+                          "productIds": [],
+                          "startsAt": "2026-09-27T05:14:45.576Z",
+                          "expiresAt": "2026-10-28T05:14:45.578Z",
+                          "status": "ACTIVE",
+                          "usedCount": 0,
+                          "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                          "createdAt": "2026-09-28T05:14:50.012Z",
+                          "updatedAt": "2026-09-28T05:14:50.012Z",
+                          "__v": 0,
+                          "state": "ACTIVE",
+                          "remainingUses": null
+                        }
+                      ],
+                      "pagination": {
+                        "page": 1,
+                        "limit": 50,
+                        "total": 8,
+                        "totalPages": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Create a coupon",
+        "description": "**Permission:** `coupons.create`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponRequest"
+              },
+              "example": {
+                "code": "EID10",
+                "description": "10% off everything",
+                "discountType": "PERCENTAGE",
+                "discountValue": 10,
+                "minOrderAmount": 500,
+                "maxDiscount": 120,
+                "usageLimit": 100,
+                "perUserLimit": 1,
+                "scope": "ENTIRE_ORDER",
+                "startsAt": "2026-09-28T00:00:00.000Z",
+                "expiresAt": "2026-10-28T00:00:00.000Z",
+                "status": "ACTIVE"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon created successfully",
+                      "data": {
+                        "code": "EID10",
+                        "description": "10% off everything",
+                        "discountType": "PERCENTAGE",
+                        "discountValue": 10,
+                        "minOrderAmount": 500,
+                        "maxDiscount": 120,
+                        "usageLimit": null,
+                        "perUserLimit": 1,
+                        "scope": "ENTIRE_ORDER",
+                        "categoryIds": [],
+                        "productIds": [],
+                        "startsAt": "2026-09-27T05:14:45.576Z",
+                        "expiresAt": "2026-10-28T05:14:45.578Z",
+                        "status": "ACTIVE",
+                        "usedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "_id": "6ab9f7caa086d0d565d8de74",
+                        "createdAt": "2026-09-28T05:14:50.012Z",
+                        "updatedAt": "2026-09-28T05:14:50.012Z",
+                        "state": "ACTIVE",
+                        "remainingUses": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/coupons/apply": {
+      "post": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Check a coupon against my cart (checkout)",
+        "description": "**Login required** (`cart.manage`). Returns the discount for the current cart. Send `city` to also get the delivery charge and final total. The discount is on the product price only, never on delivery. Then send the same code as `couponCode` when placing the order.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "example": "EID10"
+                  },
+                  "city": {
+                    "type": "string",
+                    "example": "Dhaka"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Coupon applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "discountType": {
+                          "type": "string"
+                        },
+                        "discountValue": {
+                          "type": "number"
+                        },
+                        "scope": {
+                          "type": "string"
+                        },
+                        "subtotal": {
+                          "type": "number"
+                        },
+                        "eligibleSubtotal": {
+                          "type": "number"
+                        },
+                        "discount": {
+                          "type": "number"
+                        },
+                        "shippingCost": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "totalAmount": {
+                          "type": "number",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon applied: you save ৳120",
+                      "data": {
+                        "code": "EID10",
+                        "description": "10% off everything",
+                        "discountType": "PERCENTAGE",
+                        "discountValue": 10,
+                        "scope": "ENTIRE_ORDER",
+                        "subtotal": 1500,
+                        "eligibleSubtotal": 1500,
+                        "discount": 120,
+                        "shippingCost": 80,
+                        "totalAmount": 1460
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The code cannot be used. `message` says why: invalid code, not active, not valid yet, expired, usage limit reached, already used, minimum order not reached, no matching items, empty cart.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "message": "Add ৳3,500 more to use this coupon (minimum order ৳5,000)"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/coupons/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Coupon ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Get a coupon (with category/product names)",
+        "description": "**Permission:** `coupons.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coupon",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon fetched successfully",
+                      "data": {
+                        "_id": "6ab9f7caa086d0d565d8de76",
+                        "code": "LOTION200",
+                        "description": "",
+                        "discountType": "FIXED",
+                        "discountValue": 200,
+                        "minOrderAmount": null,
+                        "maxDiscount": null,
+                        "usageLimit": null,
+                        "perUserLimit": null,
+                        "scope": "PRODUCTS",
+                        "categoryIds": [],
+                        "productIds": [
+                          "6ab9f7c5a086d0d565d8de73"
+                        ],
+                        "startsAt": "2026-09-27T05:14:45.576Z",
+                        "expiresAt": "2026-10-28T05:14:45.578Z",
+                        "status": "ACTIVE",
+                        "usedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "createdAt": "2026-09-28T05:14:50.710Z",
+                        "updatedAt": "2026-09-28T05:14:50.710Z",
+                        "state": "ACTIVE",
+                        "remainingUses": null,
+                        "categories": [],
+                        "products": [
+                          {
+                            "_id": "6ab9f7c5a086d0d565d8de73",
+                            "productTitle": "Lotion",
+                            "slug": "lotion",
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Edit a coupon",
+        "description": "**Permission:** `coupons.update`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon updated successfully",
+                      "data": {
+                        "code": "EID10",
+                        "description": "Eid offer",
+                        "discountType": "PERCENTAGE",
+                        "discountValue": 10,
+                        "minOrderAmount": 500,
+                        "maxDiscount": null,
+                        "usageLimit": null,
+                        "perUserLimit": 1,
+                        "scope": "ENTIRE_ORDER",
+                        "categoryIds": [],
+                        "productIds": [],
+                        "startsAt": "2026-09-27T05:14:45.576Z",
+                        "expiresAt": "2026-10-28T05:14:45.578Z",
+                        "status": "ACTIVE",
+                        "usedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "_id": "6ab9f7caa086d0d565d8de74",
+                        "createdAt": "2026-09-28T05:14:50.012Z",
+                        "updatedAt": "2026-09-28T05:15:47.393Z",
+                        "state": "ACTIVE",
+                        "remainingUses": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Delete a coupon",
+        "description": "**Permission:** `coupons.delete`. Orders that used it keep the code and discount.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon deleted successfully",
+                      "data": {
+                        "_id": "6ab9f7cba086d0d565d8de79",
+                        "code": "FIRST50"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/coupons/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Coupon ID"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Coupons"
+        ],
+        "summary": "Turn a coupon on or off",
+        "description": "**Permission:** `coupons.update`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACTIVE",
+                      "INACTIVE"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Coupon deactivated",
+                      "data": {
+                        "_id": "6ab9f7caa086d0d565d8de74",
+                        "code": "EID10",
+                        "description": "Eid offer",
+                        "discountType": "PERCENTAGE",
+                        "discountValue": 10,
+                        "minOrderAmount": 500,
+                        "maxDiscount": null,
+                        "usageLimit": null,
+                        "perUserLimit": 1,
+                        "scope": "ENTIRE_ORDER",
+                        "categoryIds": [],
+                        "productIds": [],
+                        "startsAt": "2026-09-27T05:14:45.576Z",
+                        "expiresAt": "2026-10-28T05:14:45.578Z",
+                        "status": "INACTIVE",
+                        "usedCount": 0,
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "createdAt": "2026-09-28T05:14:50.012Z",
+                        "updatedAt": "2026-09-28T05:15:48.572Z",
+                        "state": "INACTIVE",
+                        "remainingUses": null
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/invoices": {
+      "get": {
+        "tags": [
+          "Invoices"
+        ],
+        "summary": "List invoices with totals",
+        "description": "**Permission:** `invoices.view`\n\n`summary` has the four cards: totalInvoices, totalSales, todayInvoices, todaySales (Bangladesh time). Sales leave out cancelled orders; a refund takes back only the product price. Statuses are live from the order.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice #, order #, customer name, phone or email"
+          },
+          {
+            "name": "dateRange",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "today",
+                "yesterday",
+                "last7Days",
+                "last30Days",
+                "thisMonth",
+                "lastMonth"
+              ]
+            }
+          },
+          {
+            "name": "fromDate",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "example": "2026-09-01"
+            },
+            "description": "Custom range start (used when dateRange is not sent)"
+          },
+          {
+            "name": "toDate",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "example": "2026-09-30"
+            },
+            "description": "Custom range end (whole day included)"
+          },
+          {
+            "name": "paymentStatus",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "PAID",
+                "FAILED",
+                "REFUNDED"
+              ]
+            }
+          },
+          {
+            "name": "orderStatus",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "CONFIRMED",
+                "PROCESSING",
+                "SHIPPED",
+                "DELIVERED",
+                "CANCELLED"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest",
+                "amountHigh",
+                "amountLow"
+              ],
+              "default": "newest"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            },
+            "description": "Rows per page (max 100)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InvoiceListItem"
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "totalInvoices": {
+                          "type": "integer"
+                        },
+                        "totalSales": {
+                          "type": "number"
+                        },
+                        "todayInvoices": {
+                          "type": "integer"
+                        },
+                        "todaySales": {
+                          "type": "number"
+                        },
+                        "totalProductSales": {
+                          "type": "number"
+                        },
+                        "totalShipping": {
+                          "type": "number"
+                        },
+                        "todayProductSales": {
+                          "type": "number"
+                        },
+                        "todayShipping": {
+                          "type": "number"
+                        },
+                        "basis": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Invoices fetched successfully",
+                      "data": [
+                        {
+                          "_id": "6abb64ed0beea4b9d524ab19",
+                          "invoiceNumber": "INV-20260929-000004",
+                          "orderId": "6abb64ec0beea4b9d524ab15",
+                          "orderNumber": "ORD-1021",
+                          "customerId": "6abb64a30beea4b9d524aaf3",
+                          "customerName": "Invoice Test",
+                          "customerPhone": "01712345678",
+                          "subtotal": 1000,
+                          "discount": 0,
+                          "couponCode": null,
+                          "shippingCost": 80,
+                          "totalAmount": 1080,
+                          "paymentMethod": "CASH_ON_DELIVERY",
+                          "issuedAt": "2026-09-29T07:12:45.576Z",
+                          "orderStatus": "CANCELLED",
+                          "paymentStatus": "PENDING",
+                          "refundAmount": 0,
+                          "itemCount": 1
+                        },
+                        {
+                          "_id": "6abb64e40beea4b9d524ab0f",
+                          "invoiceNumber": "INV-20260929-000003",
+                          "orderId": "6abb64e20beea4b9d524ab0b",
+                          "orderNumber": "ORD-1020",
+                          "customerId": "6abb64a30beea4b9d524aaf3",
+                          "customerName": "Invoice Test",
+                          "customerPhone": "01712345678",
+                          "subtotal": 1000,
+                          "discount": 0,
+                          "couponCode": null,
+                          "shippingCost": 80,
+                          "totalAmount": 1080,
+                          "paymentMethod": "CASH_ON_DELIVERY",
+                          "issuedAt": "2026-09-29T07:12:36.103Z",
+                          "orderStatus": "DELIVERED",
+                          "paymentStatus": "REFUNDED",
+                          "refundAmount": 1000,
+                          "itemCount": 1
+                        }
+                      ],
+                      "summary": {
+                        "totalInvoices": 4,
+                        "totalSales": 2240,
+                        "todayInvoices": 4,
+                        "todaySales": 2240,
+                        "totalProductSales": 2000,
+                        "totalShipping": 240,
+                        "todayProductSales": 2000,
+                        "todayShipping": 240,
+                        "basis": "Sales leave out cancelled orders. A refund takes back only the product price."
+                      },
+                      "pagination": {
+                        "page": 1,
+                        "limit": 2,
+                        "total": 4,
+                        "totalPages": 2
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Invoices"
+        ],
+        "summary": "Create the invoice for an order",
+        "description": "**Permission:** `invoices.create`\n\nConfirmed orders get their invoice automatically; use this for any other order. Returns 200 with the existing invoice if the order already has one. Cancelled orders cannot get an invoice.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "orderId"
+                ],
+                "properties": {
+                  "orderId": {
+                    "type": "string",
+                    "example": "ORD-1016",
+                    "description": "Order ID or order number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The order already had an invoice (same body)"
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Invoice"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Invoice created successfully",
+                      "data": {
+                        "invoiceNumber": "INV-20260929-000002",
+                        "orderId": "6abb64cf0beea4b9d524ab00",
+                        "orderNumber": "ORD-1018",
+                        "customerId": "6abb64a30beea4b9d524aaf3",
+                        "customerName": "Invoice Test",
+                        "customerPhone": "01712345678",
+                        "customerEmail": null,
+                        "shippingAddress": "House 1, Road 2",
+                        "shippingArea": "Gulshan",
+                        "shippingCity": "Dhaka",
+                        "items": [
+                          {
+                            "productId": "6abb64b00beea4b9d524aaf8",
+                            "productTitle": "Invoice Item",
+                            "selectedSize": null,
+                            "selectedUnit": null,
+                            "quantity": 1,
+                            "unitPrice": 1000,
+                            "subtotal": 1000
+                          }
+                        ],
+                        "subtotal": 1000,
+                        "discount": 0,
+                        "couponCode": null,
+                        "shippingCost": 80,
+                        "totalAmount": 1080,
+                        "paymentMethod": "CASH_ON_DELIVERY",
+                        "issuedAt": "2026-09-29T07:12:16.933Z",
+                        "createdBy": "6ab50f9aa10eae2c8f3953d3",
+                        "_id": "6abb64d10beea4b9d524ab03",
+                        "createdAt": "2026-09-29T07:12:17.008Z",
+                        "updatedAt": "2026-09-29T07:12:17.008Z",
+                        "orderStatus": "PENDING",
+                        "paymentStatus": "PENDING",
+                        "paidAt": null,
+                        "deliveredAt": null,
+                        "refundAmount": 0,
+                        "netAmount": 1080,
+                        "seller": {
+                          "name": "GlobalShelfBD",
+                          "logoUrl": "",
+                          "phone": "",
+                          "email": "",
+                          "address": ""
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/invoices/generate-missing": {
+      "post": {
+        "tags": [
+          "Invoices"
+        ],
+        "summary": "Create invoices for older orders that have none",
+        "description": "**Permission:** `invoices.create`\n\nCreates an invoice for every CONFIRMED / PROCESSING / SHIPPED / DELIVERED order that does not have one yet (for example orders placed before invoices existed). Safe to run again.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "created": {
+                          "type": "integer"
+                        },
+                        "invoiceNumbers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "2 invoice(s) created",
+                      "data": {
+                        "created": 2,
+                        "invoiceNumbers": [
+                          "INV-20260929-000003",
+                          "INV-20260929-000004"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/invoices/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Invoice ID or invoice number (INV-...)"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Invoices"
+        ],
+        "summary": "Get an invoice (for view / print)",
+        "description": "**Permission:** `invoices.view`",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Invoice"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Invoice fetched successfully",
+                      "data": {
+                        "_id": "6abb64e40beea4b9d524ab0f",
+                        "invoiceNumber": "INV-20260929-000003",
+                        "orderId": "6abb64e20beea4b9d524ab0b",
+                        "orderNumber": "ORD-1020",
+                        "customerId": "6abb64a30beea4b9d524aaf3",
+                        "customerName": "Invoice Test",
+                        "customerPhone": "01712345678",
+                        "customerEmail": null,
+                        "shippingAddress": "House 1, Road 2",
+                        "shippingArea": "Gulshan",
+                        "shippingCity": "Dhaka",
+                        "items": [
+                          {
+                            "productId": "6abb64b00beea4b9d524aaf8",
+                            "productTitle": "Invoice Item",
+                            "selectedSize": null,
+                            "selectedUnit": null,
+                            "quantity": 1,
+                            "unitPrice": 1000,
+                            "subtotal": 1000
+                          }
+                        ],
+                        "subtotal": 1000,
+                        "discount": 0,
+                        "couponCode": null,
+                        "shippingCost": 80,
+                        "totalAmount": 1080,
+                        "paymentMethod": "CASH_ON_DELIVERY",
+                        "issuedAt": "2026-09-29T07:12:36.103Z",
+                        "createdBy": null,
+                        "createdAt": "2026-09-29T07:12:36.264Z",
+                        "updatedAt": "2026-09-29T07:12:36.264Z",
+                        "__v": 0,
+                        "orderStatus": "DELIVERED",
+                        "paymentStatus": "REFUNDED",
+                        "paidAt": "2026-09-29T07:12:40.169Z",
+                        "deliveredAt": "2026-09-29T07:12:39.042Z",
+                        "refundAmount": 1000,
+                        "netAmount": 80,
+                        "seller": {
+                          "name": "GlobalShelfBD",
+                          "logoUrl": "",
+                          "phone": "",
+                          "email": "",
+                          "address": ""
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/invoice": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Order ID or order number"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Orders"
+        ],
+        "summary": "Invoice of my order (customer)",
+        "description": "**Login required** (`orders.view`, own orders only). Available once the order is confirmed; 404 while it is PENDING or if it was cancelled.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Invoice"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Invoice fetched successfully",
+                      "data": {
+                        "_id": "6abb64c90beea4b9d524aafe",
+                        "invoiceNumber": "INV-20260929-000001",
+                        "orderId": "6abb64c40beea4b9d524aafa",
+                        "orderNumber": "ORD-1017",
+                        "customerId": "6abb64a30beea4b9d524aaf3",
+                        "customerName": "Invoice Test",
+                        "customerPhone": "01712345678",
+                        "customerEmail": null,
+                        "shippingAddress": "House 1, Road 2",
+                        "shippingArea": "Gulshan",
+                        "shippingCity": "Dhaka",
+                        "items": [
+                          {
+                            "productId": "6abb64b00beea4b9d524aaf8",
+                            "productTitle": "Invoice Item",
+                            "selectedSize": null,
+                            "selectedUnit": null,
+                            "quantity": 1,
+                            "unitPrice": 1000,
+                            "subtotal": 1000
+                          }
+                        ],
+                        "subtotal": 1000,
+                        "discount": 0,
+                        "couponCode": null,
+                        "shippingCost": 80,
+                        "totalAmount": 1080,
+                        "paymentMethod": "CASH_ON_DELIVERY",
+                        "issuedAt": "2026-09-29T07:12:08.815Z",
+                        "createdBy": null,
+                        "createdAt": "2026-09-29T07:12:09.330Z",
+                        "updatedAt": "2026-09-29T07:12:09.330Z",
+                        "orderStatus": "CONFIRMED",
+                        "paymentStatus": "PENDING",
+                        "paidAt": null,
+                        "deliveredAt": null,
+                        "refundAmount": 0,
+                        "netAmount": 1080,
+                        "seller": {
+                          "name": "GlobalShelfBD",
+                          "logoUrl": "",
+                          "phone": "",
+                          "email": "",
+                          "address": ""
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/reviews": {
+      "post": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Write a review (verified purchase only)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "**Login required** (`reviews.create`). The order must be yours and DELIVERED, and the product must be in it. Rating is a whole number 1-5; comment is optional plain text (max 1000, no HTML). One review per order + product. The review starts as PENDING and is public only after an admin approves it. Any userId/status/showOnHomepage sent is ignored.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "orderId",
+                  "productId",
+                  "rating"
+                ],
+                "properties": {
+                  "orderId": {
+                    "type": "string"
+                  },
+                  "productId": {
+                    "type": "string"
+                  },
+                  "rating": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
+                    "example": 5
+                  },
+                  "comment": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "example": "Product quality is very good."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Submitted (PENDING)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Thank you! Your review was submitted and will appear after approval.",
+                      "data": {
+                        "_id": "6abb8e904c7a71dd693537f5",
+                        "orderId": "6abb8e854c7a71dd693537ec",
+                        "productId": "6abb8e694c7a71dd693537d0",
+                        "rating": 5,
+                        "comment": "Product quality is very good.",
+                        "status": "PENDING",
+                        "createdAt": "2026-09-29T10:10:24.542Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/reviews/eligibility": {
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Can I review this product?",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "**Login required.** `eligible` is true when you have a DELIVERED order with this product that you have not reviewed yet; send one of `orders[].orderId` when writing the review. `alreadyReviewed` is true when every delivered order of it is already reviewed.",
+        "parameters": [
+          {
+            "name": "productId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Product ID or slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eligibility",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "eligible": {
+                          "type": "boolean"
+                        },
+                        "alreadyReviewed": {
+                          "type": "boolean"
+                        },
+                        "productId": {
+                          "type": "string"
+                        },
+                        "orders": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "orderId": {
+                                "type": "string"
+                              },
+                              "orderNumber": {
+                                "type": "string"
+                              },
+                              "deliveredAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review eligibility",
+                      "data": {
+                        "eligible": true,
+                        "alreadyReviewed": false,
+                        "productId": "6abb8e694c7a71dd693537d0",
+                        "orders": [
+                          {
+                            "orderId": "6abb8e854c7a71dd693537ec",
+                            "orderNumber": "ORD-1020",
+                            "deliveredAt": "2026-09-29T10:10:18.444Z"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/reviews/my": {
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "My reviews (any status)",
+        "description": "**Login required.**",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "My reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/reviews/homepage": {
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Homepage review carousel",
+        "description": "Public. APPROVED reviews an admin marked `showOnHomepage`.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 12,
+              "maximum": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/ReviewPublic"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "productId": {
+                                "type": "string"
+                              },
+                              "productName": {
+                                "type": "string"
+                              },
+                              "productImage": {
+                                "type": "string"
+                              },
+                              "productSlug": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Homepage reviews",
+                      "data": [
+                        {
+                          "_id": "6abb8e904c7a71dd693537f5",
+                          "customerName": "Rahim Uddin.",
+                          "rating": 5,
+                          "comment": "Product quality is very good.",
+                          "verifiedPurchase": true,
+                          "createdAt": "2026-09-29T10:10:24.542Z",
+                          "productId": "6abb8e694c7a71dd693537d0",
+                          "productName": "Panjabi",
+                          "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                          "productSlug": "panjabi"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/products/{id}/reviews": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Product ID or slug"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Approved reviews of a product",
+        "description": "Public. APPROVED reviews of this product, plus approved reviews an admin attached to it (`verifiedPurchase: false`, `reviewedProduct` names the product actually bought). Newest first, with the rating summary and a 5-to-1 star breakdown.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReviewPublic"
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "averageRating": {
+                          "type": "number"
+                        },
+                        "totalReviews": {
+                          "type": "integer"
+                        },
+                        "breakdown": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Product reviews",
+                      "data": [
+                        {
+                          "_id": "6abb9bd7caef831a7d68a232",
+                          "customerName": "U.",
+                          "rating": 4,
+                          "comment": "Nice fabric and fit.",
+                          "verifiedPurchase": false,
+                          "reviewedProduct": "Tshirt",
+                          "createdAt": "2026-09-29T11:07:03.402Z"
+                        }
+                      ],
+                      "summary": {
+                        "averageRating": 4,
+                        "totalReviews": 1,
+                        "breakdown": {
+                          "1": 0,
+                          "2": 0,
+                          "3": 0,
+                          "4": 1,
+                          "5": 0
+                        }
+                      },
+                      "pagination": {
+                        "page": 1,
+                        "limit": 20,
+                        "total": 1,
+                        "totalPages": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/products/{id}/rating": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Product ID or slug"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Product rating",
+        "description": "Public. APPROVED reviews only. The same `rating` object is also in every product response (list and details).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Rating",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "averageRating": {
+                          "type": "number",
+                          "example": 4.8
+                        },
+                        "totalReviews": {
+                          "type": "integer",
+                          "example": 125
+                        }
+                      },
+                      "description": "APPROVED reviews only"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Product rating",
+                      "data": {
+                        "productId": "6abb8e694c7a71dd693537d0",
+                        "averageRating": 5,
+                        "totalReviews": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews": {
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "All reviews (admin)",
+        "description": "**Permission:** `reviews.view`. `summary` has the counts for the tabs.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PENDING",
+                "APPROVED",
+                "REJECTED",
+                "HIDDEN"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Customer name/email, product, order number or comment"
+          },
+          {
+            "name": "rating",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          },
+          {
+            "name": "showOnHomepage",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "productId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "oldest",
+                "ratingHigh",
+                "ratingLow"
+              ],
+              "default": "newest"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReviewAdmin"
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer"
+                        },
+                        "pending": {
+                          "type": "integer"
+                        },
+                        "approved": {
+                          "type": "integer"
+                        },
+                        "rejected": {
+                          "type": "integer"
+                        },
+                        "hidden": {
+                          "type": "integer"
+                        },
+                        "onHomepage": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Reviews fetched successfully",
+                      "data": [
+                        {
+                          "_id": "6abb8e924c7a71dd693537f8",
+                          "customerId": "6ab8fe8f4647fa43279f2c77",
+                          "orderId": "6abb8e854c7a71dd693537ec",
+                          "productId": "6abb8e6a4c7a71dd693537d1",
+                          "orderNumber": "ORD-1020",
+                          "customerName": "Rahim Uddin",
+                          "productTitle": "Saree",
+                          "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                          "rating": 3,
+                          "comment": "Good quality.",
+                          "status": "PENDING",
+                          "showOnHomepage": false,
+                          "moderatedBy": null,
+                          "moderatedAt": null,
+                          "createdAt": "2026-09-29T10:10:26.709Z",
+                          "updatedAt": "2026-09-29T10:10:26.709Z",
+                          "__v": 0,
+                          "customerEmail": "rahim@example.com"
+                        },
+                        {
+                          "_id": "6abb8e904c7a71dd693537f5",
+                          "customerId": "6ab8fe8f4647fa43279f2c77",
+                          "orderId": "6abb8e854c7a71dd693537ec",
+                          "productId": "6abb8e694c7a71dd693537d0",
+                          "orderNumber": "ORD-1020",
+                          "customerName": "Rahim Uddin",
+                          "productTitle": "Panjabi",
+                          "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                          "rating": 5,
+                          "comment": "Product quality is very good.",
+                          "status": "PENDING",
+                          "showOnHomepage": false,
+                          "moderatedBy": null,
+                          "moderatedAt": null,
+                          "createdAt": "2026-09-29T10:10:24.542Z",
+                          "updatedAt": "2026-09-29T10:10:24.542Z",
+                          "__v": 0,
+                          "customerEmail": "rahim@example.com"
+                        }
+                      ],
+                      "summary": {
+                        "total": 2,
+                        "pending": 2,
+                        "approved": 0,
+                        "rejected": 0,
+                        "hidden": 0,
+                        "onHomepage": 0
+                      },
+                      "pagination": {
+                        "page": 1,
+                        "limit": 20,
+                        "total": 2,
+                        "totalPages": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Review ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "One review with its audit trail (admin)",
+        "description": "**Permission:** `reviews.view`. Includes `moderatedByName` and `audit` (every action on this review: created, approved, hidden, products attached...).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ReviewAdmin"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "moderatedByName": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "audit": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "action": {
+                                    "type": "string"
+                                  },
+                                  "by": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "oldValue": {},
+                                  "newValue": {},
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review fetched successfully",
+                      "data": {
+                        "_id": "6abb9bd7caef831a7d68a232",
+                        "customerId": "6abb9bc8caef831a7d68a223",
+                        "orderId": "6abb9bd0caef831a7d68a22a",
+                        "productId": "6abb9bcbcaef831a7d68a226",
+                        "orderNumber": "ORD-1019",
+                        "customerName": "Rahim Uddin",
+                        "productTitle": "Tshirt",
+                        "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                        "rating": 4,
+                        "comment": "Nice fabric and fit.",
+                        "status": "HIDDEN",
+                        "showOnHomepage": false,
+                        "associatedProductIds": [
+                          "6abb9bcccaef831a7d68a227"
+                        ],
+                        "moderatedBy": "6ab50f9aa10eae2c8f3953d3",
+                        "moderatedAt": "2026-09-29T11:07:15.728Z",
+                        "createdAt": "2026-09-29T11:07:03.402Z",
+                        "updatedAt": "2026-09-29T11:07:15.729Z",
+                        "customerEmail": "rahim@example.com",
+                        "productSlug": "tshirt",
+                        "associatedProducts": [
+                          {
+                            "_id": "6abb9bcccaef831a7d68a227",
+                            "productTitle": "Polo",
+                            "slug": "polo",
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          }
+                        ],
+                        "product": {
+                          "_id": "6abb9bcbcaef831a7d68a226",
+                          "slug": "tshirt",
+                          "status": "ACTIVE",
+                          "ratingAverage": 0,
+                          "ratingCount": 0
+                        },
+                        "moderatedByName": "Super Admin",
+                        "audit": [
+                          {
+                            "action": "REVIEW_CREATED",
+                            "by": "Rahim Uddin",
+                            "oldValue": null,
+                            "newValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "productId": "6abb9bcbcaef831a7d68a226",
+                              "rating": 4
+                            },
+                            "at": "2026-09-29T11:07:03.502Z"
+                          },
+                          {
+                            "action": "REVIEW_APPROVED",
+                            "by": "Super Admin",
+                            "oldValue": {
+                              "status": "PENDING"
+                            },
+                            "newValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "status": "APPROVED"
+                            },
+                            "at": "2026-09-29T11:07:05.141Z"
+                          },
+                          {
+                            "action": "REVIEW_PRODUCTS_UPDATED",
+                            "by": "Super Admin",
+                            "oldValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "associatedProductIds": []
+                            },
+                            "newValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "associatedProductIds": [
+                                "6abb9bcccaef831a7d68a227",
+                                "6abb9bcecaef831a7d68a228"
+                              ]
+                            },
+                            "at": "2026-09-29T11:07:11.017Z"
+                          },
+                          {
+                            "action": "REVIEW_PRODUCTS_UPDATED",
+                            "by": "Super Admin",
+                            "oldValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "associatedProductIds": [
+                                "6abb9bcccaef831a7d68a227",
+                                "6abb9bcecaef831a7d68a228"
+                              ]
+                            },
+                            "newValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "associatedProductIds": [
+                                "6abb9bcccaef831a7d68a227"
+                              ]
+                            },
+                            "at": "2026-09-29T11:07:14.357Z"
+                          },
+                          {
+                            "action": "REVIEW_HIDDEN",
+                            "by": "Super Admin",
+                            "oldValue": {
+                              "status": "APPROVED"
+                            },
+                            "newValue": {
+                              "reviewId": "6abb9bd7caef831a7d68a232",
+                              "status": "HIDDEN"
+                            },
+                            "at": "2026-09-29T11:07:16.405Z"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Delete a review",
+        "description": "**Permission:** `reviews.delete`. The product rating is recalculated.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "_id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review deleted successfully",
+                      "data": {
+                        "_id": "6abb8e924c7a71dd693537f8"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews/{id}/status": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Review ID"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Approve / reject / hide a review",
+        "description": "**Permission:** `reviews.update`. Only APPROVED reviews are public and count in the rating (recalculated here). Leaving APPROVED also removes it from the homepage.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "PENDING",
+                      "APPROVED",
+                      "REJECTED",
+                      "HIDDEN"
+                    ],
+                    "example": "APPROVED"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ReviewAdmin"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review approved",
+                      "data": {
+                        "_id": "6abb8e904c7a71dd693537f5",
+                        "customerId": "6ab8fe8f4647fa43279f2c77",
+                        "orderId": "6abb8e854c7a71dd693537ec",
+                        "productId": "6abb8e694c7a71dd693537d0",
+                        "orderNumber": "ORD-1020",
+                        "customerName": "Rahim Uddin",
+                        "productTitle": "Panjabi",
+                        "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                        "rating": 5,
+                        "comment": "Product quality is very good.",
+                        "status": "APPROVED",
+                        "showOnHomepage": false,
+                        "moderatedBy": "6ab50f9aa10eae2c8f3953d3",
+                        "moderatedAt": "2026-09-29T10:10:30.975Z",
+                        "createdAt": "2026-09-29T10:10:24.542Z",
+                        "updatedAt": "2026-09-29T10:10:30.975Z",
+                        "customerEmail": "rahim@example.com"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews/{id}/homepage": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Review ID"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Show on homepage carousel",
+        "description": "**Permission:** `reviews.update`. Only an APPROVED review can be shown.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "showOnHomepage"
+                ],
+                "properties": {
+                  "showOnHomepage": {
+                    "type": "boolean",
+                    "example": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ReviewAdmin"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review will show on the homepage",
+                      "data": {
+                        "_id": "6abb8e904c7a71dd693537f5",
+                        "customerId": "6ab8fe8f4647fa43279f2c77",
+                        "orderId": "6abb8e854c7a71dd693537ec",
+                        "productId": "6abb8e694c7a71dd693537d0",
+                        "orderNumber": "ORD-1020",
+                        "customerName": "Rahim Uddin",
+                        "productTitle": "Panjabi",
+                        "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                        "rating": 5,
+                        "comment": "Product quality is very good.",
+                        "status": "APPROVED",
+                        "showOnHomepage": true,
+                        "moderatedBy": "6ab50f9aa10eae2c8f3953d3",
+                        "moderatedAt": "2026-09-29T10:10:30.975Z",
+                        "createdAt": "2026-09-29T10:10:24.542Z",
+                        "updatedAt": "2026-09-29T10:10:32.948Z",
+                        "customerEmail": "rahim@example.com"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/admin/reviews/{id}/products": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Review ID"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Manage associated products",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "description": "**Permission:** `reviews.update`. Replaces the list of other products this review is attached to (max 20; `[]` removes all; the bought product and repeats are ignored). While APPROVED, the review shows on those product pages (not as a verified purchase) and counts in their rating; ratings of added and removed products are recalculated.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "productIds"
+                ],
+                "properties": {
+                  "productIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": [
+                      "<product id>",
+                      "<product id>"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ReviewAdmin"
+                    }
+                  }
+                },
+                "examples": {
+                  "Real response": {
+                    "value": {
+                      "success": true,
+                      "message": "Review attached to 2 other product(s)",
+                      "data": {
+                        "_id": "6abb9bd7caef831a7d68a232",
+                        "customerId": "6abb9bc8caef831a7d68a223",
+                        "orderId": "6abb9bd0caef831a7d68a22a",
+                        "productId": "6abb9bcbcaef831a7d68a226",
+                        "orderNumber": "ORD-1019",
+                        "customerName": "Rahim Uddin",
+                        "productTitle": "Tshirt",
+                        "productImage": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                        "rating": 4,
+                        "comment": "Nice fabric and fit.",
+                        "status": "APPROVED",
+                        "showOnHomepage": false,
+                        "associatedProductIds": [
+                          "6abb9bcccaef831a7d68a227",
+                          "6abb9bcecaef831a7d68a228"
+                        ],
+                        "moderatedBy": "6ab50f9aa10eae2c8f3953d3",
+                        "moderatedAt": "2026-09-29T11:07:04.424Z",
+                        "createdAt": "2026-09-29T11:07:03.402Z",
+                        "updatedAt": "2026-09-29T11:07:10.261Z",
+                        "customerEmail": "rahim@example.com",
+                        "productSlug": "tshirt",
+                        "associatedProducts": [
+                          {
+                            "_id": "6abb9bcccaef831a7d68a227",
+                            "productTitle": "Polo",
+                            "slug": "polo",
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          },
+                          {
+                            "_id": "6abb9bcecaef831a7d68a228",
+                            "productTitle": "Hoodie",
+                            "slug": "hoodie",
+                            "thumbnail": "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+                            "status": "ACTIVE"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9385,6 +12408,20 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "rating": {
+            "type": "object",
+            "properties": {
+              "averageRating": {
+                "type": "number",
+                "example": 4.8
+              },
+              "totalReviews": {
+                "type": "integer",
+                "example": 125
+              }
+            },
+            "description": "APPROVED reviews only"
           }
         }
       },
@@ -9720,6 +12757,11 @@
               "CARD"
             ],
             "example": "CASH_ON_DELIVERY"
+          },
+          "couponCode": {
+            "type": "string",
+            "example": "EID10",
+            "description": "Optional. Check it first with POST /api/coupons/apply"
           }
         }
       },
@@ -9856,6 +12898,27 @@
           },
           "shippingInformation": {
             "$ref": "#/components/schemas/ShippingInformation"
+          },
+          "coupon": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "discountType": {
+                "type": "string"
+              },
+              "discountValue": {
+                "type": "number"
+              },
+              "eligibleSubtotal": {
+                "type": "number"
+              },
+              "discount": {
+                "type": "number"
+              }
+            }
           }
         }
       },
@@ -9975,6 +13038,19 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "couponCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Coupon used on this order"
+          },
+          "refundAmount": {
+            "type": "number",
+            "description": "Money given back on refund: product price after discount. The delivery charge is never refunded (it goes to the shipping company)."
+          },
+          "canCancel": {
+            "type": "boolean",
+            "description": "The customer may cancel now (PENDING, CONFIRMED or PROCESSING). The backend checks again on cancel."
           }
         }
       },
@@ -10702,7 +13778,8 @@
                 "type": "number",
                 "description": "Delivery charge (paid to the delivery company)"
               }
-            }
+            },
+            "description": "Money that came in, counted on the day it was paid (orders refunded later are still included here)"
           },
           "refunded": {
             "type": "object",
@@ -10723,11 +13800,13 @@
                 "type": "number",
                 "description": "Delivery charge (paid to the delivery company)"
               }
-            }
+            },
+            "description": "Only the product price is refunded; shippingCost is always 0"
           },
           "net": {
             "type": "number",
-            "example": 2260
+            "example": 2260,
+            "description": "received - refunded product price (delivery charges are never refunded)"
           },
           "netSplit": {
             "type": "object",
@@ -11034,6 +14113,661 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "CouponRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "discountType",
+          "discountValue",
+          "startsAt",
+          "expiresAt"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "EID10",
+            "description": "3-30 letters, numbers, - or _. Saved in capitals."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "example": "10% off everything"
+          },
+          "discountType": {
+            "type": "string",
+            "enum": [
+              "PERCENTAGE",
+              "FIXED"
+            ]
+          },
+          "discountValue": {
+            "type": "number",
+            "example": 10,
+            "description": "Percent (max 100) or taka"
+          },
+          "minOrderAmount": {
+            "type": "number",
+            "nullable": true,
+            "example": 500,
+            "description": "Cart subtotal needed; null = none"
+          },
+          "maxDiscount": {
+            "type": "number",
+            "nullable": true,
+            "example": 120,
+            "description": "Highest discount in taka; null = no cap"
+          },
+          "usageLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 100,
+            "description": "Uses across all customers; null = unlimited"
+          },
+          "perUserLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 1,
+            "description": "Uses per customer; null = unlimited"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "ENTIRE_ORDER",
+              "CATEGORIES",
+              "PRODUCTS"
+            ],
+            "description": "Which items the discount is calculated on"
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For CATEGORIES (sub-categories are included)"
+          },
+          "productIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For PRODUCTS"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ]
+          }
+        }
+      },
+      "CouponUpdate": {
+        "type": "object",
+        "description": "Send only the fields to change. The code of a used coupon cannot change.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "EID10",
+            "description": "3-30 letters, numbers, - or _. Saved in capitals."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "example": "10% off everything"
+          },
+          "discountType": {
+            "type": "string",
+            "enum": [
+              "PERCENTAGE",
+              "FIXED"
+            ]
+          },
+          "discountValue": {
+            "type": "number",
+            "example": 10,
+            "description": "Percent (max 100) or taka"
+          },
+          "minOrderAmount": {
+            "type": "number",
+            "nullable": true,
+            "example": 500,
+            "description": "Cart subtotal needed; null = none"
+          },
+          "maxDiscount": {
+            "type": "number",
+            "nullable": true,
+            "example": 120,
+            "description": "Highest discount in taka; null = no cap"
+          },
+          "usageLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 100,
+            "description": "Uses across all customers; null = unlimited"
+          },
+          "perUserLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 1,
+            "description": "Uses per customer; null = unlimited"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "ENTIRE_ORDER",
+              "CATEGORIES",
+              "PRODUCTS"
+            ],
+            "description": "Which items the discount is calculated on"
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For CATEGORIES (sub-categories are included)"
+          },
+          "productIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For PRODUCTS"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ]
+          }
+        }
+      },
+      "Coupon": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "example": "EID10",
+            "description": "3-30 letters, numbers, - or _. Saved in capitals."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "example": "10% off everything"
+          },
+          "discountType": {
+            "type": "string",
+            "enum": [
+              "PERCENTAGE",
+              "FIXED"
+            ]
+          },
+          "discountValue": {
+            "type": "number",
+            "example": 10,
+            "description": "Percent (max 100) or taka"
+          },
+          "minOrderAmount": {
+            "type": "number",
+            "nullable": true,
+            "example": 500,
+            "description": "Cart subtotal needed; null = none"
+          },
+          "maxDiscount": {
+            "type": "number",
+            "nullable": true,
+            "example": 120,
+            "description": "Highest discount in taka; null = no cap"
+          },
+          "usageLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 100,
+            "description": "Uses across all customers; null = unlimited"
+          },
+          "perUserLimit": {
+            "type": "integer",
+            "nullable": true,
+            "example": 1,
+            "description": "Uses per customer; null = unlimited"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "ENTIRE_ORDER",
+              "CATEGORIES",
+              "PRODUCTS"
+            ],
+            "description": "Which items the discount is calculated on"
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For CATEGORIES (sub-categories are included)"
+          },
+          "productIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For PRODUCTS"
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE"
+            ]
+          },
+          "usedCount": {
+            "type": "integer",
+            "description": "Orders using it now (a cancelled order gives the use back)"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "SCHEDULED",
+              "EXPIRED",
+              "USED_UP"
+            ],
+            "description": "Worked out from status + dates + usage"
+          },
+          "remainingUses": {
+            "type": "integer",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InvoiceListItem": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "invoiceNumber": {
+            "type": "string",
+            "example": "INV-20260929-000001"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerPhone": {
+            "type": "string"
+          },
+          "itemCount": {
+            "type": "integer"
+          },
+          "subtotal": {
+            "type": "number"
+          },
+          "discount": {
+            "type": "number"
+          },
+          "couponCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "shippingCost": {
+            "type": "number"
+          },
+          "totalAmount": {
+            "type": "number"
+          },
+          "paymentMethod": {
+            "type": "string"
+          },
+          "orderStatus": {
+            "type": "string",
+            "description": "Live from the order"
+          },
+          "paymentStatus": {
+            "type": "string",
+            "description": "Live from the order"
+          },
+          "refundAmount": {
+            "type": "number",
+            "description": "Product price given back (delivery charge is never refunded)"
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "invoiceNumber": {
+            "type": "string",
+            "example": "INV-20260929-000001"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerPhone": {
+            "type": "string"
+          },
+          "itemCount": {
+            "type": "integer"
+          },
+          "subtotal": {
+            "type": "number"
+          },
+          "discount": {
+            "type": "number"
+          },
+          "couponCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "shippingCost": {
+            "type": "number"
+          },
+          "totalAmount": {
+            "type": "number"
+          },
+          "paymentMethod": {
+            "type": "string"
+          },
+          "orderStatus": {
+            "type": "string",
+            "description": "Live from the order"
+          },
+          "paymentStatus": {
+            "type": "string",
+            "description": "Live from the order"
+          },
+          "refundAmount": {
+            "type": "number",
+            "description": "Product price given back (delivery charge is never refunded)"
+          },
+          "issuedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customerEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "shippingAddress": {
+            "type": "string"
+          },
+          "shippingArea": {
+            "type": "string"
+          },
+          "shippingCity": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "productId": {
+                  "type": "string"
+                },
+                "productTitle": {
+                  "type": "string"
+                },
+                "selectedSize": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "selectedUnit": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "quantity": {
+                  "type": "integer"
+                },
+                "unitPrice": {
+                  "type": "number"
+                },
+                "subtotal": {
+                  "type": "number"
+                }
+              }
+            }
+          },
+          "paidAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deliveredAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "netAmount": {
+            "type": "number",
+            "description": "totalAmount - refundAmount"
+          },
+          "seller": {
+            "type": "object",
+            "description": "Shop details for the printed invoice (from the Footer settings)",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "logoUrl": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ReviewAdmin": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "customerEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "orderNumber": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "productTitle": {
+            "type": "string"
+          },
+          "productImage": {
+            "type": "string"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "comment": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "APPROVED",
+              "REJECTED",
+              "HIDDEN"
+            ]
+          },
+          "showOnHomepage": {
+            "type": "boolean"
+          },
+          "moderatedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "moderatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "associatedProductIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Other products this review is attached to"
+          },
+          "associatedProducts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_id": {
+                  "type": "string"
+                },
+                "productTitle": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "thumbnail": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "For \"Tshirt +4 more\""
+          },
+          "productSlug": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ReviewPublic": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string",
+            "example": "Rahim U.",
+            "description": "First name + last initial"
+          },
+          "rating": {
+            "type": "integer"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "verifiedPurchase": {
+            "type": "boolean",
+            "description": "True on the page of the product that was bought; false where an admin attached the review"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reviewedProduct": {
+            "type": "string",
+            "nullable": true,
+            "description": "Name of the product actually reviewed, when shown on another product's page"
           }
         }
       }

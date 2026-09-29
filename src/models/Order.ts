@@ -17,6 +17,9 @@ export interface IOrder {
   // Money is always calculated by the backend
   subtotal: number;
   discount: number;
+  // Coupon used on this order (the code is kept even if the coupon is later deleted)
+  couponId: Types.ObjectId | null;
+  couponCode: string | null;
   shippingCost: number;
   totalAmount: number;
   paymentMethod: PaymentMethod;
@@ -36,6 +39,8 @@ export interface IOrder {
   deliveredAt: Date | null;
   paidAt: Date | null;
   refundedAt: Date | null;
+  // Money given back on refund: the product price after discount. The delivery charge is never refunded.
+  refundAmount: number;
   // Set once when stock is returned, so a cancel can never restore stock twice
   stockRestoredAt: Date | null;
   createdAt: Date;
@@ -50,6 +55,8 @@ const orderSchema = new Schema<IOrder>(
     customerId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     subtotal: { type: Number, required: true, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
+    couponId: { type: Schema.Types.ObjectId, ref: "Coupon", default: null },
+    couponCode: { type: String, default: null },
     shippingCost: { type: Number, required: true, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
@@ -68,6 +75,7 @@ const orderSchema = new Schema<IOrder>(
     deliveredAt: { type: Date, default: null, index: true },
     paidAt: { type: Date, default: null, index: true },
     refundedAt: { type: Date, default: null },
+    refundAmount: { type: Number, default: 0, min: 0 },
     stockRestoredAt: { type: Date, default: null },
   },
   {

@@ -48,12 +48,26 @@ interface Totals {
   subtotal: number;
   shippingCost: number;
   discount: number;
+  keptSubtotal: number;
+  keptDiscount: number;
+  refundedOrders: number;
 }
-const EMPTY: Totals = { amount: 0, orders: 0, subtotal: 0, shippingCost: 0, discount: 0 };
+const EMPTY: Totals = { amount: 0, orders: 0, subtotal: 0, shippingCost: 0, discount: 0, keptSubtotal: 0, keptDiscount: 0, refundedOrders: 0 };
 const round = (n: number) => Math.round(n * 100) / 100;
 
+// A refund returns only the product price (after discount). The delivery charge is never refunded:
+// it has already gone to the shipping company.
+const isRefunded = { $eq: ["$paymentStatus", "REFUNDED"] };
+const unlessRefunded = (value: unknown) => ({ $cond: [isRefunded, 0, value] });
+
 // Sum orders per period in one query. `dateExpr` picks the date each order counts on.
-const totalsByPeriod = async (match: Record<string, unknown>, dateExpr: unknown, periods: Period[]) => {
+// With `dropRefundedProducts`, refunded orders count their delivery charge only.
+const totalsByPeriod = async (
+  match: Record<string, unknown>,
+  dateExpr: unknown,
+  periods: Period[],
+  { dropRefundedProducts = false } = {}
+) => {
   const earliest = periods.reduce((min, p) => (p.from < min ? p.from : min), periods[0].from);
   const group = {
     _id: null,
@@ -61,6 +75,9 @@ const totalsByPeriod = async (match: Record<string, unknown>, dateExpr: unknown,
     subtotal: { $sum: "$subtotal" },
     shippingCost: { $sum: "$shippingCost" },
     discount: { $sum: "$discount" },
+    keptSubtotal: { $sum: unlessRefunded("$subtotal") },
+    keptDiscount: { $sum: unlessRefunded("$discount") },
+    refundedOrders: { $sum: { $cond: [isRefunded, 1, 0] } },
     orders: { $sum: 1 },
   };
   const pipeline: PipelineStage[] = [
@@ -77,16 +94,19 @@ const totalsByPeriod = async (match: Record<string, unknown>, dateExpr: unknown,
 
   return periods.map((p) => {
     const t = result[p.key][0] || EMPTY;
+    const subtotal = dropRefundedProducts ? t.keptSubtotal : t.subtotal;
+    const discount = dropRefundedProducts ? t.keptDiscount : t.discount;
     return {
       key: p.key,
       label: p.label,
       from: p.from,
       to: p.to,
-      amount: round(t.amount),
+      amount: round(dropRefundedProducts ? subtotal - discount + t.shippingCost : t.amount),
       orders: t.orders,
-      productSales: round(t.subtotal),
+      refundedOrders: t.refundedOrders,
+      productSales: round(subtotal),
       shippingCost: round(t.shippingCost),
-      discount: round(t.discount),
+      discount: round(discount),
     };
   });
 };
@@ -96,13 +116,13 @@ const deliveredDate = { $ifNull: ["$deliveredAt", "$updatedAt"] };
 const paidDate = { $ifNull: ["$paidAt", "$updatedAt"] };
 const refundedDate = { $ifNull: ["$refundedAt", "$updatedAt"] };
 
-// @desc    Sales for the dashboard: delivered orders (refunds excluded) per period
+// @desc    Sales for the dashboard: delivered orders per period. A refunded order keeps only its delivery charge.
 // @route   GET /api/reports/sales
 // @access  sales.view
 export const getSalesSummary = async (req: Request, res: Response) => {
   const periods = buildPeriods();
   const [sales, pipelineRows] = await Promise.all([
-    totalsByPeriod({ orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } }, deliveredDate, periods),
+    totalsByPeriod({ orderStatus: "DELIVERED" }, deliveredDate, periods, { dropRefundedProducts: true }),
     // Orders still in progress right now (not time based)
     Order.aggregate<{ _id: string; orders: number; amount: number; productAmount: number; shippingCost: number }>([
       {
@@ -138,7 +158,8 @@ export const getSalesSummary = async (req: Request, res: Response) => {
     data: {
       currency: "BDT",
       timezone: "Asia/Dhaka (UTC+6)",
-      basis: "Delivered orders; refunded orders are excluded. amount = totalAmount (products + shipping - discount)",
+      basis:
+        "Delivered orders. amount = product sales - discount + shipping. A refunded order returns only its product price, so it adds its shipping charge but no product sales.",
       periods: sales,
       ordersByStatus: byStatus,
     },
@@ -151,7 +172,8 @@ export const getSalesSummary = async (req: Request, res: Response) => {
 export const getPaymentsSummary = async (req: Request, res: Response) => {
   const periods = buildPeriods();
   const [received, refunded, pending] = await Promise.all([
-    totalsByPeriod({ paymentStatus: "PAID" }, paidDate, periods),
+    // Money that came in, counted on the day it was paid (a later refund is shown separately)
+    totalsByPeriod({ paymentStatus: { $in: ["PAID", "REFUNDED"] } }, paidDate, periods),
     totalsByPeriod({ paymentStatus: "REFUNDED" }, refundedDate, periods),
     // Money not collected yet (unpaid orders that are not cancelled)
     Order.aggregate<{ _id: string; orders: number; amount: number; productAmount: number; shippingCost: number }>([
@@ -181,19 +203,23 @@ export const getPaymentsSummary = async (req: Request, res: Response) => {
     data: {
       currency: "BDT",
       timezone: "Asia/Dhaka (UTC+6)",
-      periods: received.map((p, i) => ({
-        key: p.key,
-        label: p.label,
-        from: p.from,
-        to: p.to,
-        received: { amount: p.amount, orders: p.orders, ...split(p) },
-        refunded: { amount: refunded[i].amount, orders: refunded[i].orders, ...split(refunded[i]) },
-        net: round(p.amount - refunded[i].amount),
-        netSplit: {
-          productAmount: round(split(p).productAmount - split(refunded[i]).productAmount),
-          shippingCost: round(p.shippingCost - refunded[i].shippingCost),
-        },
-      })),
+      periods: received.map((p, i) => {
+        // Only the product price is given back; the delivery charge stays with the shipping company
+        const refundedProducts = split(refunded[i]).productAmount;
+        return {
+          key: p.key,
+          label: p.label,
+          from: p.from,
+          to: p.to,
+          received: { amount: p.amount, orders: p.orders, ...split(p) },
+          refunded: { amount: refundedProducts, orders: refunded[i].orders, productAmount: refundedProducts, shippingCost: 0 },
+          net: round(p.amount - refundedProducts),
+          netSplit: {
+            productAmount: round(split(p).productAmount - refundedProducts),
+            shippingCost: round(p.shippingCost),
+          },
+        };
+      }),
       outstanding: {
         amount: sum("amount"),
         orders: pending.reduce((total, r) => total + r.orders, 0),
@@ -236,7 +262,7 @@ export const getSalesChart = async (req: Request, res: Response) => {
 
   const from = startOfBdDay(config.days - 1);
   const rows = await Order.aggregate<{ _id: string; amount: number; productAmount: number; shippingCost: number; orders: number }>([
-    { $match: { orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } } },
+    { $match: { orderStatus: "DELIVERED" } },
     { $addFields: { reportDate: deliveredDate } },
     { $match: { reportDate: { $gte: from } } },
     {
@@ -244,12 +270,13 @@ export const getSalesChart = async (req: Request, res: Response) => {
         _id: {
           $dateToString: { date: "$reportDate", format: config.unit === "day" ? "%Y-%m-%d" : "%Y-%m", timezone: BD_TIMEZONE },
         },
-        amount: { $sum: "$totalAmount" },
-        productAmount: { $sum: { $subtract: ["$subtotal", "$discount"] } },
+        // Refunded orders keep only their delivery charge
+        productAmount: { $sum: unlessRefunded({ $subtract: ["$subtotal", "$discount"] }) },
         shippingCost: { $sum: "$shippingCost" },
         orders: { $sum: 1 },
       },
     },
+    { $addFields: { amount: { $add: ["$productAmount", "$shippingCost"] } } },
   ]);
   const byLabel = new Map(rows.map((r) => [r._id, r]));
   const points = bucketLabels(from, config.unit).map((label) => ({

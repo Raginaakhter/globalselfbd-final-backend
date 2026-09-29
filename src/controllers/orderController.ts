@@ -12,6 +12,7 @@ import { decrementStock, quantitiesByProduct } from "../utils/inventory";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { notifyOrderEvent } from "../utils/orderEmails";
 import { getAuthUser } from "../middleware/auth";
+import { claimCoupon, normalizeCouponCode } from "../utils/coupons";
 import {
   ORDER_STATUSES,
   ORDER_NUMBER_PREFIX,
@@ -35,6 +36,15 @@ const toSummary = (draft: OrderDraft) => ({
   })),
   subtotal: draft.subtotal,
   discount: draft.discount,
+  coupon: draft.coupon
+    ? {
+        code: draft.coupon.code,
+        discountType: draft.coupon.coupon.discountType,
+        discountValue: draft.coupon.coupon.discountValue,
+        eligibleSubtotal: draft.coupon.eligibleSubtotal,
+        discount: draft.coupon.discount,
+      }
+    : null,
   shippingCost: draft.shippingCost,
   totalAmount: draft.totalAmount,
   paymentMethod: draft.shippingInfo.paymentMethod,
@@ -54,7 +64,7 @@ const toSummary = (draft: OrderDraft) => ({
 // @access  orders.create
 export const checkout = async (req: Request, res: Response) => {
   const shippingInfo = parseShippingInfo(req.body);
-  const draft = await buildOrderDraft(getAuthUser(req)._id, shippingInfo);
+  const draft = await buildOrderDraft(getAuthUser(req)._id, shippingInfo, normalizeCouponCode(req.body?.couponCode));
 
   res.status(200).json({
     success: true,
@@ -70,7 +80,7 @@ export const checkout = async (req: Request, res: Response) => {
 export const createOrder = async (req: Request, res: Response) => {
   const customer = getAuthUser(req);
   const shippingInfo = parseShippingInfo(req.body);
-  const draft = await buildOrderDraft(customer._id, shippingInfo);
+  const draft = await buildOrderDraft(customer._id, shippingInfo, normalizeCouponCode(req.body?.couponCode));
   const { cartItemIds } = draft;
 
   const session = await mongoose.startSession();
@@ -91,6 +101,8 @@ export const createOrder = async (req: Request, res: Response) => {
             customerId: customer._id,
             subtotal: draft.subtotal,
             discount: draft.discount,
+            couponId: draft.coupon?.coupon._id ?? null,
+            couponCode: draft.coupon?.code ?? null,
             shippingCost: draft.shippingCost,
             totalAmount: draft.totalAmount,
             paymentMethod: shippingInfo.paymentMethod,
@@ -106,6 +118,7 @@ export const createOrder = async (req: Request, res: Response) => {
         { session }
       );
       const orderId = order._id;
+      if (draft.coupon) await claimCoupon(draft.coupon, customer._id, orderId, session);
 
       await OrderItem.insertMany(
         draft.items.map((item) => ({ ...item, orderId })),

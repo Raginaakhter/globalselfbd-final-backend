@@ -1,6 +1,7 @@
 import express from "express";
 const router = express.Router();
 import { getProductOptions, createProduct, getProducts, getProduct, updateProduct, updateProductStatus, updateProductStock, updateProductGallery, deleteProduct } from "../controllers/productController";
+import { getProductReviews, getProductRating } from "../controllers/reviewController";
 import { authenticate, optionalAuthenticate, requirePermission, requireAnyPermission } from "../middleware/auth";
 
 // Must be before "/:id"
@@ -10,6 +11,9 @@ router.get("/options", authenticate, requireAnyPermission("products.create", "pr
 // Logged-in users see more depending on their permissions.
 router.get("/", optionalAuthenticate, getProducts);
 router.get("/:id", optionalAuthenticate, getProduct);
+// Public: approved reviews and rating (:id = product ID or slug)
+router.get("/:id/reviews", getProductReviews);
+router.get("/:id/rating", getProductRating);
 
 router.post("/", authenticate, requirePermission("products.create"), createProduct);
 router.put("/:id", authenticate, requirePermission("products.update"), updateProduct);
