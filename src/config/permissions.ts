@@ -21,6 +21,8 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   sales: ["view"],
   reports: ["view"],
   coupons: ["view", "create", "update", "delete"],
+  combos: ["view", "create", "update", "delete"],
+  offers: ["view", "create", "update", "delete"],
   reviews: ["view", "create", "update", "delete"],
   contactMessages: ["view", "update", "delete"],
   newsletter: ["view", "delete", "send"],
@@ -85,6 +87,8 @@ const DEFAULT_ROLES: DefaultRole[] = [
     permissions: expandPermissions([
       "dashboard.view",
       "products.*",
+      "combos.*",
+      "offers.*",
       "categories.*",
       "brands.*",
       "inventory.*",

@@ -7,6 +7,7 @@ import OrderItem from "../models/OrderItem";
 import CartItem from "../models/CartItem";
 import { loadPermissions } from "../middleware/auth";
 import AppError from "../utils/AppError";
+import { logActivity } from "../utils/activityLog";
 import { slugify, isValidSlug, uniqueSlug } from "../utils/slugify";
 import { isValidImageUrl } from "../utils/imageValidation";
 import {
@@ -269,6 +270,7 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
   const status = queryString(req.query.status);
   const availability = queryString(req.query.availability);
   const isFabric = queryString(req.query.isFabric);
+  const hasDiscount = queryString(req.query.hasDiscount);
   const minPrice = queryString(req.query.minPrice);
   const maxPrice = queryString(req.query.maxPrice);
   const sort = queryString(req.query.sort);
@@ -301,6 +303,10 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
     filter.stock = availability === AVAILABILITY.IN_STOCK ? { $gt: 0 } : 0;
   }
   if (isFabric !== undefined) filter.isFabric = toBoolean(isFabric, "isFabric");
+  if (hasDiscount !== undefined) {
+    const want = toBoolean(hasDiscount, "hasDiscount");
+    filter.customerSpecialPrice = want ? { $ne: null } : null;
+  }
   if (minPrice !== undefined || maxPrice !== undefined) {
     const range: Record<string, number> = {};
     if (minPrice !== undefined) range.$gte = toNumber(minPrice, "minPrice");
@@ -565,6 +571,108 @@ export const updateProductGallery = async (req: Request, res: Response) => {
     success: true,
     message: "Gallery updated successfully",
     data: toProductResponse(asProductLike(product), getProductVisibility(req.permissions)),
+  });
+};
+
+// Parse a list of product IDs for the bulk endpoints
+const parseProductIdList = (value: unknown): mongoose.Types.ObjectId[] => {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new AppError('"productIds" must be a non-empty array of IDs', 400);
+  }
+  const unique = [...new Set(value.map((id: unknown) => String(id)))];
+  unique.forEach((id) => assertObjectId(id, "product ID"));
+  if (unique.length > 500) throw new AppError("You can update at most 500 products at once", 400);
+  return unique.map((id) => new mongoose.Types.ObjectId(id));
+};
+
+// @desc    Apply the same discount to several products at once
+// @route   POST /api/products/bulk-discount
+// @access  products.update
+// Body: { productIds, discountType: "PERCENTAGE" | "FIXED", discountValue }
+export const bulkApplyDiscount = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Body;
+  const ids = parseProductIdList(body.productIds);
+  const discountType = body.discountType;
+  if (discountType !== "PERCENTAGE" && discountType !== "FIXED") {
+    throw new AppError('discountType must be "PERCENTAGE" or "FIXED"', 400);
+  }
+  const value = toNumber(body.discountValue, "discountValue");
+  if (value <= 0) throw new AppError("discountValue must be greater than 0", 400);
+  if (discountType === "PERCENTAGE" && value > 100) {
+    throw new AppError("Percentage discount cannot be more than 100", 400);
+  }
+
+  const products = await Product.find({ _id: { $in: ids } }).select(
+    "_id customerSellPrice customerSpecialPrice"
+  );
+  if (products.length !== ids.length) {
+    throw new AppError("One or more products were not found", 404);
+  }
+
+  let modified = 0;
+  const ops = products.map((p) => {
+    const sell = p.customerSellPrice;
+    const special =
+      discountType === "PERCENTAGE"
+        ? Math.max(Math.round((sell - (sell * value) / 100) * 100) / 100, 0.01)
+        : Math.max(Math.round((sell - value) * 100) / 100, 0.01);
+    if (special >= sell) {
+      // Keep sell price when discount would make it zero or more than sell price
+      return null;
+    }
+    modified += 1;
+    return {
+      updateOne: {
+        filter: { _id: p._id },
+        update: { $set: { customerSpecialPrice: special } },
+      },
+    };
+  });
+
+  const bulkOps = ops.filter((o): o is NonNullable<typeof o> => o !== null);
+  if (bulkOps.length > 0) {
+    await Product.bulkWrite(bulkOps);
+  }
+
+  await logActivity(req, {
+    action: "PRODUCT_BULK_DISCOUNT_APPLIED",
+    newValue: {
+      requested: ids.length,
+      updated: modified,
+      discountType,
+      discountValue: value,
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: `Discount applied to ${modified} product(s)`,
+    data: { requested: ids.length, matched: products.length, modified },
+  });
+};
+
+// @desc    Clear the special price on several products at once
+// @route   POST /api/products/bulk-remove-discount
+// @access  products.update
+export const bulkRemoveDiscount = async (req: Request, res: Response) => {
+  const ids = parseProductIdList((req.body || {}).productIds);
+  const result = await Product.updateMany(
+    { _id: { $in: ids }, customerSpecialPrice: { $ne: null } },
+    { $set: { customerSpecialPrice: null } }
+  );
+  await logActivity(req, {
+    action: "PRODUCT_BULK_DISCOUNT_REMOVED",
+    newValue: { requested: ids.length, modified: result.modifiedCount },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: `Discount cleared on ${result.modifiedCount} product(s)`,
+    data: {
+      requested: ids.length,
+      matched: result.matchedCount,
+      modified: result.modifiedCount,
+    },
   });
 };
 

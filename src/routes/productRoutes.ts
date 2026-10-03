@@ -1,11 +1,27 @@
 import express from "express";
 const router = express.Router();
-import { getProductOptions, createProduct, getProducts, getProduct, updateProduct, updateProductStatus, updateProductStock, updateProductGallery, deleteProduct } from "../controllers/productController";
+import {
+  getProductOptions,
+  createProduct,
+  getProducts,
+  getProduct,
+  updateProduct,
+  updateProductStatus,
+  updateProductStock,
+  updateProductGallery,
+  deleteProduct,
+  bulkApplyDiscount,
+  bulkRemoveDiscount,
+} from "../controllers/productController";
 import { getProductReviews, getProductRating } from "../controllers/reviewController";
 import { authenticate, optionalAuthenticate, requirePermission, requireAnyPermission } from "../middleware/auth";
 
 // Must be before "/:id"
 router.get("/options", authenticate, requireAnyPermission("products.create", "products.update"), getProductOptions);
+
+// Bulk discount ops (must be before "/:id")
+router.post("/bulk-discount", authenticate, requirePermission("products.update"), bulkApplyDiscount);
+router.post("/bulk-remove-discount", authenticate, requirePermission("products.update"), bulkRemoveDiscount);
 
 // Browsing works for guests too (customer view: ACTIVE only, no stock/cost).
 // Logged-in users see more depending on their permissions.

@@ -1,6 +1,13 @@
 import type { Request, Response } from "express";
+import mongoose from "mongoose";
 import Order, { type OrderDocument } from "../models/Order";
 import OrderItem from "../models/OrderItem";
+import Invoice from "../models/Invoice";
+import CouponRedemption from "../models/CouponRedemption";
+import Review from "../models/Review";
+import Combo from "../models/Combo";
+import { refreshRatingsOf } from "../utils/reviews";
+import { releaseCoupon } from "../utils/coupons";
 import User from "../models/User";
 import AppError from "../utils/AppError";
 import { logActivity } from "../utils/activityLog";
@@ -9,6 +16,7 @@ import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryStri
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { notifyOrderEvent, notifyReviewRequest } from "../utils/orderEmails";
 import {
+  CANCELLABLE_STATUSES,
   ORDER_STATUS,
   ORDER_STATUSES,
   ORDER_TRANSITIONS,
@@ -253,5 +261,80 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     success: true,
     message: `Payment status updated to ${paymentStatus}`,
     data: toOrderResponse(updated, items),
+  });
+};
+
+// @desc    Permanently delete any order (by ID or order number)
+//          PENDING/CONFIRMED/PROCESSING: cancelled first, so stock, combo stats and coupon usage are given back.
+//          SHIPPED/DELIVERED: stock is NOT restored (the goods already left); combo stats are rolled back
+//          and the order's reviews are removed (product ratings are recalculated).
+// @route   DELETE /api/admin/orders/:id
+// @access  orders.delete
+export const deleteOrder = async (req: Request, res: Response) => {
+  let order = await findOrderOr404(String(req.params.id));
+
+  const statusBefore = order.orderStatus;
+  if (CANCELLABLE_STATUSES.includes(order.orderStatus)) {
+    order = await cancelOrder(order); // restores stock + releases coupon
+  }
+  const statusNow = order.orderStatus;
+  const wasFulfilled = statusNow === ORDER_STATUS.SHIPPED || statusNow === ORDER_STATUS.DELIVERED;
+
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+  const reviews = await Review.find({ orderId: order._id }).select("productId associatedProductIds").lean();
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Status filter: never delete an order that moved on in the meantime
+      const removed = await Order.deleteOne({ _id: order._id, orderStatus: statusNow }, { session });
+      if (removed.deletedCount !== 1) throw new AppError("Order was changed by someone else. Please reload", 409);
+
+      // Cancelled orders already had their combo stats rolled back by cancelOrder
+      if (wasFulfilled) {
+        const comboTotals = new Map<string, { quantity: number; revenue: number }>();
+        for (const item of items) {
+          if (!item.comboId) continue;
+          const key = String(item.comboId);
+          const existing = comboTotals.get(key) || { quantity: 0, revenue: 0 };
+          existing.quantity += item.quantity;
+          existing.revenue += item.subtotal;
+          comboTotals.set(key, existing);
+        }
+        for (const [comboId, totals] of comboTotals) {
+          await Combo.updateOne({ _id: comboId }, { $inc: { soldCount: -totals.quantity, revenue: -totals.revenue } }, { session });
+        }
+        await releaseCoupon(order._id, session); // give the coupon use back
+      }
+
+      await OrderItem.deleteMany({ orderId: order._id }, { session });
+      await Invoice.deleteMany({ orderId: order._id }, { session });
+      await CouponRedemption.deleteMany({ orderId: order._id }, { session });
+      await Review.deleteMany({ orderId: order._id }, { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  // Deleted reviews no longer count towards product ratings
+  for (const review of reviews) await refreshRatingsOf(review);
+
+  // Keep a snapshot in the activity log, because the order itself is gone
+  await logActivity(req, {
+    action: "ORDER_DELETED",
+    targetOrderId: order._id,
+    targetUserId: order.customerId,
+    oldValue: {
+      orderNumber: order.orderNumber,
+      orderStatus: statusBefore,
+      paymentStatus: order.paymentStatus,
+      totalAmount: order.totalAmount,
+      itemCount: items.length,
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: "Order deleted successfully",
+    data: { _id: order._id, orderNumber: order.orderNumber },
   });
 };

@@ -32,6 +32,8 @@ import reportRoutes from "./routes/reportRoutes";
 import newsletterRoutes from "./routes/newsletterRoutes";
 import { contactRouter, contactMessagesRouter } from "./routes/contactRoutes";
 import couponRoutes from "./routes/couponRoutes";
+import comboRoutes from "./routes/comboRoutes";
+import offerRoutes from "./routes/offerRoutes";
 import invoiceRoutes from "./routes/invoiceRoutes";
 import { reviewRouter, adminReviewRouter } from "./routes/reviewRoutes";
 
@@ -94,6 +96,8 @@ app.use("/api/newsletter", newsletterRoutes);
 app.use("/api/contact", contactRouter);
 app.use("/api/contact-messages", contactMessagesRouter);
 app.use("/api/coupons", couponRoutes);
+app.use("/api/combos", comboRoutes);
+app.use("/api/offers", offerRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/reviews", reviewRouter);
 app.use("/api/admin/reviews", adminReviewRouter);

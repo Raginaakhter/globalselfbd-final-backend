@@ -2,7 +2,8 @@ import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 import { PAYMENT_METHODS, type PaymentMethod } from "../config/orderOptions";
 
 export interface InvoiceItem {
-  productId: Types.ObjectId;
+  productId: Types.ObjectId | null;
+  comboId: Types.ObjectId | null;
   productTitle: string;
   selectedSize: string | null;
   selectedUnit: string | null;
@@ -42,7 +43,8 @@ export type InvoiceDocument = HydratedDocument<IInvoice>;
 
 const invoiceItemSchema = new Schema<InvoiceItem>(
   {
-    productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    productId: { type: Schema.Types.ObjectId, ref: "Product", default: null },
+    comboId: { type: Schema.Types.ObjectId, ref: "Combo", default: null },
     productTitle: { type: String, required: true },
     selectedSize: { type: String, default: null },
     selectedUnit: { type: String, default: null },

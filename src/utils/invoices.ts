@@ -44,6 +44,7 @@ export const issueInvoice = async (
       shippingCity: order.shippingCity,
       items: items.map((i) => ({
         productId: i.productId,
+        comboId: i.comboId,
         productTitle: i.productTitleSnapshot,
         selectedSize: i.selectedSize,
         selectedUnit: i.selectedUnit,

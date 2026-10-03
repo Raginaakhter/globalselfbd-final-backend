@@ -280,13 +280,18 @@ export const applyCoupon = async (req: Request, res: Response) => {
   const customer = getAuthUser(req);
 
   const { lines } = await loadCart(customer._id);
-  const usable = lines.filter((l) => !l.issue && l.product);
+  // Coupons apply to product lines only; combo lines are excluded
+  const usable = lines.filter((l) => !l.issue && l.product && l.item.productId);
   if (!usable.length) throw new AppError("Your cart is empty", 400);
   const subtotal = roundMoney(usable.reduce((sum, l) => sum + l.item.subtotal, 0));
   const applied = await evaluateCoupon(
     code,
     customer._id,
-    usable.map(({ item, product }) => ({ productId: item.productId, categoryId: (product as ProductDocument).categoryId, subtotal: item.subtotal })),
+    usable.map(({ item, product }) => ({
+      productId: item.productId as Types.ObjectId,
+      categoryId: (product as ProductDocument).categoryId,
+      subtotal: item.subtotal,
+    })),
     subtotal
   );
 

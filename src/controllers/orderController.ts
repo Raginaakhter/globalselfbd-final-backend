@@ -3,12 +3,13 @@ import type { Request, Response } from "express";
 import Order, { type OrderDocument } from "../models/Order";
 import OrderItem from "../models/OrderItem";
 import CartItem from "../models/CartItem";
+import Combo from "../models/Combo";
 import { nextSequence } from "../models/Counter";
 import AppError from "../utils/AppError";
 import { logActivity } from "../utils/activityLog";
 import { getPagination, queryString } from "../utils/validators";
 import { parseShippingInfo, buildOrderDraft, type OrderDraft } from "../utils/checkout";
-import { decrementStock, quantitiesByProduct } from "../utils/inventory";
+import { decrementStock } from "../utils/inventory";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { notifyOrderEvent } from "../utils/orderEmails";
 import { getAuthUser } from "../middleware/auth";
@@ -26,6 +27,7 @@ import {
 const toSummary = (draft: OrderDraft) => ({
   items: draft.items.map((i) => ({
     productId: i.productId,
+    comboId: i.comboId,
     productTitle: i.productTitleSnapshot,
     thumbnail: i.thumbnailSnapshot,
     quantity: i.quantity,
@@ -33,6 +35,7 @@ const toSummary = (draft: OrderDraft) => ({
     selectedUnit: i.selectedUnit,
     unitPrice: i.unitPrice,
     subtotal: i.subtotal,
+    comboItemsSnapshot: i.comboItemsSnapshot,
   })),
   subtotal: draft.subtotal,
   discount: draft.discount,
@@ -125,9 +128,34 @@ export const createOrder = async (req: Request, res: Response) => {
         { session }
       );
 
-      // Atomic "only if enough stock" updates; a conflicting order makes this throw and roll back
-      for (const [productId, quantity] of quantitiesByProduct(draft.items)) {
+      // Aggregate per-product requested stock from both product lines AND combo member lines
+      const stockNeeded = new Map<string, number>();
+      for (const item of draft.items) {
+        if (item.productId) {
+          const key = String(item.productId);
+          stockNeeded.set(key, (stockNeeded.get(key) || 0) + item.quantity);
+        } else if (item.comboId) {
+          for (const member of item.comboItemsSnapshot) {
+            const key = String(member.productId);
+            stockNeeded.set(key, (stockNeeded.get(key) || 0) + member.quantity * item.quantity);
+          }
+        }
+      }
+      for (const [productId, quantity] of stockNeeded) {
         await decrementStock(productId, quantity, session);
+      }
+
+      // Update combo analytics (sold count, revenue)
+      for (const comboLine of draft.comboLines) {
+        const comboItem = draft.items.find(
+          (i) => i.comboId && String(i.comboId) === String(comboLine.comboId)
+        );
+        const revenueDelta = comboItem ? comboItem.subtotal : 0;
+        await Combo.updateOne(
+          { _id: comboLine.comboId },
+          { $inc: { soldCount: comboLine.quantity, revenue: revenueDelta } },
+          { session }
+        );
       }
     });
   } finally {

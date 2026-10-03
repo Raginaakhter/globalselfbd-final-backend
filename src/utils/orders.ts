@@ -1,9 +1,10 @@
 import mongoose, { type Types } from "mongoose";
 import Order, { type IOrder, type OrderDocument } from "../models/Order";
 import OrderItem, { type IOrderItem } from "../models/OrderItem";
+import Combo from "../models/Combo";
 import AppError from "./AppError";
 import { releaseCoupon } from "./coupons";
-import { restoreStock, quantitiesByProduct } from "./inventory";
+import { restoreStock } from "./inventory";
 import { CANCELLABLE_STATUSES, ORDER_STATUS } from "../config/orderOptions";
 
 export type OrderItemRecord = IOrderItem & { _id: Types.ObjectId };
@@ -34,7 +35,9 @@ export const getItemsByOrder = async (orderIds: Types.ObjectId[]): Promise<Map<s
 
 const toItemResponse = (item: OrderItemRecord) => ({
   _id: item._id,
+  type: item.comboId ? ("combo" as const) : ("product" as const),
   productId: item.productId,
+  comboId: item.comboId,
   productTitleSnapshot: item.productTitleSnapshot,
   thumbnailSnapshot: item.thumbnailSnapshot,
   quantity: item.quantity,
@@ -42,6 +45,7 @@ const toItemResponse = (item: OrderItemRecord) => ({
   selectedUnit: item.selectedUnit,
   unitPrice: item.unitPrice,
   subtotal: item.subtotal,
+  comboItemsSnapshot: item.comboItemsSnapshot || [],
 });
 
 interface CustomerInfo {
@@ -119,8 +123,38 @@ export const cancelOrder = async (order: OrderDocument): Promise<OrderDocument> 
       if (!cancelled) throw new AppError("Order is already cancelled or can no longer be cancelled", 409);
 
       const items = await OrderItem.find({ orderId: order._id }).session(session);
-      for (const [productId, quantity] of quantitiesByProduct(items)) {
+      // Restore product stock from product lines AND from combo member snapshots
+      const toRestore = new Map<string, number>();
+      for (const item of items) {
+        if (item.productId) {
+          const key = String(item.productId);
+          toRestore.set(key, (toRestore.get(key) || 0) + item.quantity);
+        } else if (item.comboId) {
+          for (const member of item.comboItemsSnapshot) {
+            const key = String(member.productId);
+            toRestore.set(key, (toRestore.get(key) || 0) + member.quantity * item.quantity);
+          }
+        }
+      }
+      for (const [productId, quantity] of toRestore) {
         await restoreStock(productId, quantity, session);
+      }
+      // Roll back combo analytics
+      const comboTotals = new Map<string, { quantity: number; revenue: number }>();
+      for (const item of items) {
+        if (!item.comboId) continue;
+        const key = String(item.comboId);
+        const existing = comboTotals.get(key) || { quantity: 0, revenue: 0 };
+        existing.quantity += item.quantity;
+        existing.revenue += item.subtotal;
+        comboTotals.set(key, existing);
+      }
+      for (const [comboId, totals] of comboTotals) {
+        await Combo.updateOne(
+          { _id: comboId },
+          { $inc: { soldCount: -totals.quantity, revenue: -totals.revenue } },
+          { session }
+        );
       }
       await releaseCoupon(order._id, session);
     });
