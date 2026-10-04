@@ -6,13 +6,15 @@ import { STATUSES, type Status } from "../types/common";
 
 export interface IUser {
   fullName: string;
+  // Primary customer login identifier (canonical BD format, e.g. "01712345678").
+  // Required for new accounts; historical users with no phone may still have "".
+  phoneNumber: string;
+  // Optional. Kept for historical orders and admin accounts; not required to register.
   email: string;
   password: string;
   // Always set by the backend (never from client input)
   role: Types.ObjectId;
   status: Status;
-  // Optional profile details (editable by the user)
-  phone: string;
   avatarUrl: string;
   passwordChangedAt?: Date;
   // Password reset OTP (only a keyed hash is stored)
@@ -56,13 +58,22 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
       trim: true,
       maxlength: [100, "Full name cannot exceed 100 characters"],
     },
+    // Sparse+unique so historical users without a phone are allowed, but any two
+    // accounts that DO have a phone cannot share one.
+    phoneNumber: {
+      type: String,
+      trim: true,
+      default: "",
+      index: { unique: true, sparse: true, partialFilterExpression: { phoneNumber: { $type: "string", $ne: "" } } },
+    },
+    // Sparse+unique for the same reason: email is optional for customers now.
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: true,
       lowercase: true,
       trim: true,
-      match: [/^\S+@\S+\.\S+$/, "Please provide a valid email"],
+      default: "",
+      match: [/^$|^\S+@\S+\.\S+$/, "Please provide a valid email"],
+      index: { unique: true, sparse: true, partialFilterExpression: { email: { $type: "string", $ne: "" } } },
     },
     password: {
       type: String,
@@ -82,7 +93,6 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
       default: "ACTIVE",
       index: true,
     },
-    phone: { type: String, trim: true, default: "" },
     avatarUrl: { type: String, trim: true, default: "" },
     passwordChangedAt: Date,
     passwordResetOtp: { type: String, select: false, default: null },

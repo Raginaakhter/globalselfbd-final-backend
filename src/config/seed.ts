@@ -102,6 +102,17 @@ const migrateLegacyUsers = async (): Promise<void> => {
   await User.collection.updateMany({ status: { $exists: false } }, { $set: { status: "ACTIVE" } });
   // Old link-based reset tokens are no longer used (replaced by OTP)
   await User.collection.updateMany({ passwordResetToken: { $exists: true } }, { $unset: { passwordResetToken: "" } });
+
+  // Phone-auth migration: carry any legacy "phone" value into the new canonical "phoneNumber" field.
+  // Only copies when phoneNumber is missing/empty, so a repeat run is a no-op.
+  const copied = await User.collection.updateMany(
+    { phone: { $type: "string", $ne: "" }, $or: [{ phoneNumber: { $exists: false } }, { phoneNumber: "" }] },
+    [{ $set: { phoneNumber: "$phone" } }]
+  );
+  if (copied.modifiedCount) {
+    console.log(`📱 Migrated ${copied.modifiedCount} user(s) from legacy "phone" to "phoneNumber"`);
+  }
+
   if (modifiedCount) {
     console.log(`🔄 ${modifiedCount} legacy user(s) moved to the Customer role`);
   }

@@ -3,8 +3,12 @@ import { AVAILABILITY, type Availability } from "../config/productOptions";
 import type { IProduct } from "../models/Product";
 import type { ICategory } from "../models/Category";
 
-export const getAvailability = (stock: number): Availability =>
-  stock > 0 ? AVAILABILITY.IN_STOCK : AVAILABILITY.OUT_OF_STOCK;
+// A pre-order product is always treated as available, because the admin promises delivery
+// after the fulfilment window even when today's stock is zero.
+export const getAvailability = (
+  stock: number,
+  isPreOrder = false
+): Availability => (stock > 0 || isPreOrder ? AVAILABILITY.IN_STOCK : AVAILABILITY.OUT_OF_STOCK);
 
 export const getFinalPrice = (product: Pick<IProduct, "customerSellPrice" | "customerSpecialPrice">): number =>
   product.customerSpecialPrice != null ? product.customerSpecialPrice : product.customerSellPrice;
@@ -62,7 +66,9 @@ export const toProductResponse = (
     quantity: p.quantity,
     thumbnail: p.thumbnail,
     gallery: p.gallery,
-    availability: getAvailability(p.stock),
+    availability: getAvailability(p.stock, p.isPreOrder),
+    isPreOrder: p.isPreOrder,
+    preOrderMinDays: p.preOrderMinDays,
     // Approved reviews only (for the product card and details page)
     rating: { averageRating: p.ratingAverage ?? 0, totalReviews: p.ratingCount ?? 0 },
     status: p.status,

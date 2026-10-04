@@ -1,5 +1,6 @@
 import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 import { SIZES, UNITS, STATUSES, LIMITS, type Size, type Unit } from "../config/productOptions";
+import { PRE_ORDER } from "../config/orderOptions";
 import type { Status } from "../types/common";
 
 export interface IProduct {
@@ -23,6 +24,10 @@ export interface IProduct {
   // From APPROVED reviews only; kept up to date when a review is approved/hidden/deleted
   ratingAverage: number;
   ratingCount: number;
+  // Pre-order: when true, this product takes orders even without stock; the admin
+  // promises delivery in at least `preOrderMinDays` days (floor: PRE_ORDER.MIN_DELIVERY_DAYS).
+  isPreOrder: boolean;
+  preOrderMinDays: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -113,11 +118,28 @@ const productSchema = new Schema<IProduct>(
     },
     ratingAverage: { type: Number, default: 0, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0, min: 0 },
+    isPreOrder: { type: Boolean, default: false, index: true },
+    preOrderMinDays: {
+      type: Number,
+      default: 0,
+      min: [0, "Pre-order days cannot be negative"],
+      max: [PRE_ORDER.MAX_DELIVERY_DAYS, `Pre-order days cannot exceed ${PRE_ORDER.MAX_DELIVERY_DAYS}`],
+      validate: {
+        validator: Number.isInteger,
+        message: "Pre-order days must be a whole number",
+      },
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Enforce the business floor: when pre-order is ON, days must be >= MIN_DELIVERY_DAYS.
+// (Validated in the controller too; this is the model-level safety net.)
+productSchema.path("preOrderMinDays").validate(function (value: number) {
+  return !this.isPreOrder || value >= PRE_ORDER.MIN_DELIVERY_DAYS;
+}, `Pre-order minimum delivery days must be at least ${PRE_ORDER.MIN_DELIVERY_DAYS}`);
 
 productSchema.index({ status: 1, categoryId: 1, createdAt: -1 });
 productSchema.index({ customerSellPrice: 1 });

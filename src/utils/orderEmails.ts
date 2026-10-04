@@ -25,7 +25,9 @@ type EmailOrder = { _id: Types.ObjectId | string } & Pick<
   | "subtotal"
   | "discount"
   | "couponCode"
+  | "fulfillmentMethod"
   | "shippingCost"
+  | "adminDiscountAmount"
   | "totalAmount"
 >;
 type EmailItem = Pick<IOrderItem, "productTitleSnapshot" | "selectedSize" | "selectedUnit" | "quantity" | "unitPrice" | "subtotal">;
@@ -54,7 +56,9 @@ const EVENTS: Record<OrderEmailEvent, { subject: string; heading: string; text: 
   PLACED: { subject: "We received your order", heading: "Thank you for your order!", text: "We have received your order and will confirm it soon." },
   CONFIRMED: { subject: "Your order is confirmed", heading: "Order confirmed", text: "Your order has been confirmed and will be prepared soon." },
   PROCESSING: { subject: "Your order is being prepared", heading: "Order is being prepared", text: "We are packing your order." },
+  READY_TO_SHIP: { subject: "Your order is ready to ship", heading: "Order ready to ship", text: "Your order has been packed and is waiting to be picked up by the courier." },
   SHIPPED: { subject: "Your order has been shipped", heading: "Order shipped", text: "Your order is on the way. Please keep your phone nearby for the delivery call." },
+  OUT_FOR_DELIVERY: { subject: "Your order is out for delivery", heading: "Out for delivery", text: "Your order is out for delivery today. Please keep your phone nearby." },
   DELIVERED: { subject: "Your order has been delivered", heading: "Order delivered", text: "Your order has been delivered. Thank you for shopping with us!" },
   CANCELLED: { subject: "Your order has been cancelled", heading: "Order cancelled successfully", text: "Your order has been cancelled successfully. If you paid online, the refund will be processed." },
 };
@@ -83,22 +87,35 @@ const itemsTable = (items: EmailItem[]): string => `
   </tbody>
 </table>`;
 
+const shippingLineLabel = (order: EmailOrder): string =>
+  order.fulfillmentMethod === "STORE_PICKUP" ? "Delivery (Store pickup)" : "Delivery charge";
+const shippingLineValue = (order: EmailOrder): string =>
+  order.fulfillmentMethod === "STORE_PICKUP" || order.shippingCost === 0 ? "Free" : money(order.shippingCost);
+
 const totalsBlock = (order: EmailOrder): string => `
 <table style="width:100%;font-size:14px;margin-bottom:16px">
   <tr><td style="padding:4px 8px">Subtotal</td><td style="padding:4px 8px;text-align:right">${money(order.subtotal)}</td></tr>
   ${order.discount > 0 ? `<tr><td style="padding:4px 8px">Discount${order.couponCode ? ` (coupon ${order.couponCode})` : ""}</td><td style="padding:4px 8px;text-align:right">-${money(order.discount)}</td></tr>` : ""}
-  <tr><td style="padding:4px 8px">Shipping</td><td style="padding:4px 8px;text-align:right">${money(order.shippingCost)}</td></tr>
+  ${(order.adminDiscountAmount || 0) > 0 ? `<tr><td style="padding:4px 8px">Admin discount</td><td style="padding:4px 8px;text-align:right">-${money(order.adminDiscountAmount)}</td></tr>` : ""}
+  <tr><td style="padding:4px 8px">${shippingLineLabel(order)}</td><td style="padding:4px 8px;text-align:right">${shippingLineValue(order)}</td></tr>
   <tr style="font-weight:bold"><td style="padding:8px;border-top:2px solid #111827">Total</td><td style="padding:8px;border-top:2px solid #111827;text-align:right">${money(order.totalAmount)}</td></tr>
 </table>`;
 
-const shippingBlock = (order: EmailOrder): string => `
+const shippingBlock = (order: EmailOrder): string => {
+  const isPickup = order.fulfillmentMethod === "STORE_PICKUP";
+  const header = isPickup ? "Store pickup" : "Delivery to";
+  const addressLine = isPickup
+    ? "Please collect your order from our store."
+    : `${escapeHtml(order.shippingAddress)}, ${escapeHtml(order.shippingArea)}, ${escapeHtml(order.shippingCity)}`;
+  return `
 <div style="background:#f9fafb;border-radius:6px;padding:12px 16px;font-size:14px;line-height:1.6">
-  <strong>Delivery to</strong><br>
+  <strong>${header}</strong><br>
   ${escapeHtml(order.shippingName)} · ${escapeHtml(order.shippingPhone)}<br>
-  ${escapeHtml(order.shippingAddress)}, ${escapeHtml(order.shippingArea)}, ${escapeHtml(order.shippingCity)}
+  ${addressLine}
   ${order.orderNotes ? `<br><span style="color:#6b7280">Note: ${escapeHtml(order.orderNotes)}</span>` : ""}
   <br><br><strong>Payment:</strong> ${PAYMENT_LABELS[order.paymentMethod] || order.paymentMethod}
 </div>`;
+};
 
 export const buildOrderEmail = (event: OrderEmailEvent, order: EmailOrder, items: EmailItem[]) => {
   const e = EVENTS[event];
@@ -136,7 +153,8 @@ export const buildOrderEmail = (event: OrderEmailEvent, order: EmailOrder, items
   return { subject, html, text };
 };
 
-// The customer's registered email (the checkout email when the account has none)
+// The customer's registered email (the checkout email when the account has none).
+// Phone-only accounts simply have no email delivery and are skipped silently.
 const getRecipient = async (order: EmailOrder): Promise<string | undefined> => {
   const user = await User.findById(order.customerId).select("email").lean();
   return user?.email || order.shippingEmail || undefined;

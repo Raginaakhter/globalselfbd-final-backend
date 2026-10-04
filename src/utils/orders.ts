@@ -51,7 +51,8 @@ const toItemResponse = (item: OrderItemRecord) => ({
 interface CustomerInfo {
   _id: Types.ObjectId;
   fullName: string;
-  email: string;
+  phoneNumber?: string;
+  email?: string;
 }
 
 // Full order details (customer and admin); admin also gets the customer account
@@ -71,11 +72,23 @@ export const toOrderResponse = (
     subtotal: o.subtotal,
     discount: o.discount,
     couponCode: o.couponCode ?? null,
+    fulfillmentMethod: o.fulfillmentMethod,
     shippingCost: o.shippingCost,
+    adminDiscountType: o.adminDiscountType ?? null,
+    adminDiscountValue: o.adminDiscountValue ?? 0,
+    adminDiscountAmount: o.adminDiscountAmount ?? 0,
     totalAmount: o.totalAmount,
     paymentMethod: o.paymentMethod,
     paymentStatus: o.paymentStatus,
     orderStatus: o.orderStatus,
+    // Pre-order details (always included so the UI can conditionally render a pre-order banner)
+    isPreOrder: o.isPreOrder ?? false,
+    preOrderMinDays: o.preOrderMinDays ?? 0,
+    expectedDeliveryDate: o.expectedDeliveryDate ?? null,
+    cancellationReason: o.cancellationReason ?? null,
+    adminNotes: o.adminNotes ?? [],
+    readyToShipAt: o.readyToShipAt ?? null,
+    outForDeliveryAt: o.outForDeliveryAt ?? null,
     // The customer may still cancel it (the backend checks this again on cancel)
     canCancel: CANCELLABLE_STATUSES.includes(o.orderStatus),
     shippingInformation: {
@@ -98,14 +111,31 @@ export const toOrderResponse = (
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
     ...(customer !== undefined
-      ? { customer: customer ? { _id: customer._id, fullName: customer.fullName, email: customer.email } : null }
+      ? {
+          customer: customer
+            ? {
+                _id: customer._id,
+                fullName: customer.fullName,
+                phoneNumber: customer.phoneNumber ?? "",
+                email: customer.email ?? "",
+              }
+            : null,
+        }
       : {}),
   };
 };
 
 // Cancel + restore stock in one transaction. The status filter makes it idempotent:
 // a second cancel finds nothing to update, so stock is never restored twice.
-export const cancelOrder = async (order: OrderDocument): Promise<OrderDocument> => {
+export interface CancelOrderOptions {
+  reason?: string | null;
+  cancelledBy?: Types.ObjectId | null;
+}
+
+export const cancelOrder = async (
+  order: OrderDocument,
+  options: CancelOrderOptions = {}
+): Promise<OrderDocument> => {
   if (!CANCELLABLE_STATUSES.includes(order.orderStatus)) {
     throw new AppError(`Order cannot be cancelled when it is ${order.orderStatus}`, 400);
   }
@@ -117,16 +147,26 @@ export const cancelOrder = async (order: OrderDocument): Promise<OrderDocument> 
       const now = new Date();
       cancelled = await Order.findOneAndUpdate(
         { _id: order._id, orderStatus: { $in: CANCELLABLE_STATUSES }, stockRestoredAt: null },
-        { $set: { orderStatus: ORDER_STATUS.CANCELLED, cancelledAt: now, stockRestoredAt: now } },
+        {
+          $set: {
+            orderStatus: ORDER_STATUS.CANCELLED,
+            cancelledAt: now,
+            stockRestoredAt: now,
+            cancellationReason: options.reason?.trim() || null,
+            cancelledBy: options.cancelledBy ?? null,
+          },
+        },
         { session, returnDocument: "after" }
       );
       if (!cancelled) throw new AppError("Order is already cancelled or can no longer be cancelled", 409);
 
       const items = await OrderItem.find({ orderId: order._id }).session(session);
-      // Restore product stock from product lines AND from combo member snapshots
+      // Restore product stock from product lines AND from combo member snapshots.
+      // Pre-order lines never decremented stock at order time, so nothing to restore for them.
       const toRestore = new Map<string, number>();
       for (const item of items) {
         if (item.productId) {
+          if (item.isPreOrder) continue;
           const key = String(item.productId);
           toRestore.set(key, (toRestore.get(key) || 0) + item.quantity);
         } else if (item.comboId) {

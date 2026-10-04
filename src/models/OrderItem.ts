@@ -21,6 +21,9 @@ export interface IOrderItem {
   selectedUnit: string | null;
   unitPrice: number;
   subtotal: number;
+  // True on a product line when the product was pre-order at checkout time.
+  // Snapshotted so cancellation knows to skip stock restore for this line.
+  isPreOrder: boolean;
   // For combo lines only: the member products at purchase time
   comboItemsSnapshot: ComboItemSnapshotEntry[];
   createdAt: Date;
@@ -39,6 +42,7 @@ const orderItemSchema = new Schema<IOrderItem>(
     selectedUnit: { type: String, default: null },
     unitPrice: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
+    isPreOrder: { type: Boolean, default: false },
     comboItemsSnapshot: {
       type: [
         {

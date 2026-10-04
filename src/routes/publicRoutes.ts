@@ -7,6 +7,7 @@ import {
   getPublicCombo,
   getPublicOffers,
   getPublicOffer,
+  trackOrder,
 } from "../controllers/publicController";
 import { getPublicBanners } from "../controllers/bannerController";
 import { getPublicBrands } from "../controllers/brandController";
@@ -18,6 +19,9 @@ const router = express.Router();
 router.get("/categories", getPublicCategories);
 router.get("/products", getPublicProducts);
 router.get("/products/:slug", getPublicProduct);
+
+// Guest order tracking by phone + order number
+router.post("/orders/track", trackOrder);
 
 // Combos
 router.get("/combos", getPublicCombos);

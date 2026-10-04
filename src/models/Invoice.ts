@@ -1,5 +1,12 @@
 import { Schema, model, type HydratedDocument, type Types } from "mongoose";
-import { PAYMENT_METHODS, type PaymentMethod } from "../config/orderOptions";
+import {
+  PAYMENT_METHODS,
+  FULFILLMENT_METHODS,
+  ADMIN_DISCOUNT_TYPES,
+  type PaymentMethod,
+  type FulfillmentMethod,
+  type AdminDiscountType,
+} from "../config/orderOptions";
 
 export interface InvoiceItem {
   productId: Types.ObjectId | null;
@@ -29,7 +36,12 @@ export interface IInvoice {
   subtotal: number;
   discount: number;
   couponCode: string | null;
+  fulfillmentMethod: FulfillmentMethod;
   shippingCost: number;
+  // Snapshot of any admin-applied manual discount on the order (0 for normal customers).
+  adminDiscountType: AdminDiscountType | null;
+  adminDiscountValue: number;
+  adminDiscountAmount: number;
   totalAmount: number;
   paymentMethod: PaymentMethod;
   issuedAt: Date;
@@ -71,7 +83,11 @@ const invoiceSchema = new Schema<IInvoice>(
     subtotal: { type: Number, required: true, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
     couponCode: { type: String, default: null },
+    fulfillmentMethod: { type: String, enum: FULFILLMENT_METHODS, default: "DELIVERY", required: true },
     shippingCost: { type: Number, required: true, min: 0 },
+    adminDiscountType: { type: String, enum: ADMIN_DISCOUNT_TYPES, default: null },
+    adminDiscountValue: { type: Number, default: 0, min: 0 },
+    adminDiscountAmount: { type: Number, default: 0, min: 0 },
     totalAmount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
     issuedAt: { type: Date, default: Date.now, index: true },

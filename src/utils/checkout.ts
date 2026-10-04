@@ -6,8 +6,19 @@ import CartItem, { type CartItemDocument, type ProductSnapshot, type ComboSnapsh
 import AppError from "./AppError";
 import { getVisibleCategoryIds } from "./categoryTree";
 import { getAvailability, getFinalPrice } from "./productView";
+import { PRE_ORDER } from "../config/orderOptions";
 import { isNonEmptyString, normalizeBdPhone } from "./validators";
-import { PAYMENT_METHODS, isPaymentMethod, type PaymentMethod } from "../config/orderOptions";
+import {
+  PAYMENT_METHODS,
+  FULFILLMENT_METHODS,
+  ADMIN_DISCOUNT_TYPES,
+  isPaymentMethod,
+  isFulfillmentMethod,
+  isAdminDiscountType,
+  type PaymentMethod,
+  type FulfillmentMethod,
+  type AdminDiscountType,
+} from "../config/orderOptions";
 import { getShippingConfig, calculateShippingCharge } from "./shipping";
 import type { Size } from "../config/productOptions";
 import { evaluateCoupon, type AppliedCoupon } from "./coupons";
@@ -182,8 +193,12 @@ export const loadCart = async (customerId: Types.ObjectId): Promise<{ cart: Cart
       try {
         assertPurchasable(product, visible);
         resolveSelection(product, item.selectedSize || undefined, item.selectedUnit || undefined);
-        if (product.stock <= 0) issue = "Out of stock";
-        else if ((requested.get(String(product._id)) || 0) > product.stock) issue = "Insufficient product stock";
+        // Pre-order products are always buyable: the admin fulfils them after the delivery window,
+        // so stock does not block the sale and stock is not decremented at order time.
+        if (!product.isPreOrder) {
+          if (product.stock <= 0) issue = "Out of stock";
+          else if ((requested.get(String(product._id)) || 0) > product.stock) issue = "Insufficient product stock";
+        }
       } catch (error) {
         issue = (error as Error).message;
       }
@@ -301,7 +316,61 @@ export interface ShippingInfo {
   area: string;
   orderNotes: string;
   paymentMethod: PaymentMethod;
+  fulfillmentMethod: FulfillmentMethod;
 }
+
+// Admin-only manual discount request. The *amount* in money is computed by the
+// backend from `eligibleSubtotal`; the *value* is what the admin typed.
+export interface AdminDiscountInput {
+  type: AdminDiscountType;
+  value: number;
+}
+
+export interface AdminDiscountResult {
+  type: AdminDiscountType;
+  value: number;
+  amount: number;
+  eligibleSubtotal: number;
+}
+
+export const parseAdminDiscountInput = (body: Record<string, unknown> = {}): AdminDiscountInput | null => {
+  const type = body.adminDiscountType;
+  const rawValue = body.adminDiscountValue;
+  const hasType = type !== undefined && type !== null && type !== "";
+  const hasValue = rawValue !== undefined && rawValue !== null && rawValue !== "";
+  if (!hasType && !hasValue) return null;
+  if (!isAdminDiscountType(type)) {
+    throw new AppError(`adminDiscountType must be one of: ${ADMIN_DISCOUNT_TYPES.join(", ")}`, 400);
+  }
+  const value = typeof rawValue === "string" ? Number(rawValue) : rawValue;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new AppError("adminDiscountValue must be a non-negative number", 400);
+  }
+  if (type === "PERCENTAGE" && value > 100) {
+    throw new AppError("Percentage discount cannot be more than 100", 400);
+  }
+  if (value === 0) return null;
+  return { type, value: roundMoney(value) };
+};
+
+// Resolve the actual taka taken off this order from an admin-discount request.
+// The eligible subtotal is the order amount *after* the coupon (so admin + coupon
+// never double-count, and the result can never make the total go negative).
+export const calculateAdminDiscount = (
+  input: AdminDiscountInput,
+  eligibleSubtotal: number
+): AdminDiscountResult => {
+  const base = Math.max(0, roundMoney(eligibleSubtotal));
+  let amount: number;
+  if (input.type === "PERCENTAGE") {
+    amount = roundMoney((base * input.value) / 100);
+  } else {
+    amount = roundMoney(input.value);
+  }
+  amount = Math.min(amount, base);
+  if (amount < 0) amount = 0;
+  return { type: input.type, value: input.value, amount, eligibleSubtotal: base };
+};
 
 // Validate checkout form. Only these fields are read (postal code is not part of the system).
 const EMAIL_REGEX = /^\S+@\S+\.\S+$/;
@@ -335,6 +404,17 @@ export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingI
     throw new AppError(`Payment method is required. Allowed: ${PAYMENT_METHODS.join(", ")}`, 400);
   }
 
+  // Default to DELIVERY so existing clients keep working; STORE_PICKUP waives the delivery charge.
+  const fulfillmentRaw = body.fulfillmentMethod;
+  const fulfillmentMethod: FulfillmentMethod =
+    fulfillmentRaw === undefined || fulfillmentRaw === null || fulfillmentRaw === ""
+      ? "DELIVERY"
+      : isFulfillmentMethod(fulfillmentRaw)
+      ? fulfillmentRaw
+      : (() => {
+          throw new AppError(`fulfillmentMethod must be one of: ${FULFILLMENT_METHODS.join(", ")}`, 400);
+        })();
+
   return {
     customerName,
     phoneNumber,
@@ -344,6 +424,7 @@ export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingI
     area,
     orderNotes,
     paymentMethod: body.paymentMethod,
+    fulfillmentMethod,
   };
 };
 
@@ -357,6 +438,8 @@ export interface DraftItem {
   selectedUnit: string | null;
   unitPrice: number;
   subtotal: number;
+  // Set only on pre-order product lines, so the order controller knows to skip stock decrement.
+  isPreOrder?: boolean;
   comboItemsSnapshot: {
     productId: Types.ObjectId;
     productTitle: string;
@@ -374,17 +457,33 @@ export interface OrderDraft {
   subtotal: number;
   discount: number;
   coupon: AppliedCoupon | null;
+  // Non-null only when the request carried a valid admin-discount AND the caller was authorized to use it.
+  adminDiscount: AdminDiscountResult | null;
   shippingCost: number;
   totalAmount: number;
   shippingInfo: ShippingInfo;
+  // Pre-order snapshot. isPreOrder = any product line is a pre-order product;
+  // preOrderMinDays = the longest window across those products (so the slowest line sets the promise).
+  isPreOrder: boolean;
+  preOrderMinDays: number;
+  expectedDeliveryDate: Date | null;
+}
+
+export interface BuildOrderDraftOptions {
+  couponCode?: string | null;
+  // Only pass this when the authenticated user has orders.adminDiscount. The order controller
+  // enforces that, so this utility can trust the input and just compute the amount.
+  adminDiscount?: AdminDiscountInput | null;
 }
 
 // Validate the whole cart for checkout and calculate totals (prices from the database only)
 export const buildOrderDraft = async (
   customerId: Types.ObjectId,
   shippingInfo: ShippingInfo,
-  couponCode: string | null = null
+  options: BuildOrderDraftOptions = {}
 ): Promise<OrderDraft> => {
+  const couponCode = options.couponCode ?? null;
+  const adminDiscountInput = options.adminDiscount ?? null;
   const { cart, lines } = await loadCart(customerId);
   if (lines.length === 0) throw new AppError("Your cart is empty", 400);
 
@@ -412,6 +511,7 @@ export const buildOrderDraft = async (
         selectedUnit: item.selectedUnit,
         unitPrice,
         subtotal: roundMoney(unitPrice * item.quantity),
+        isPreOrder: product.isPreOrder,
         comboItemsSnapshot: [],
       };
     }
@@ -456,13 +556,57 @@ export const buildOrderDraft = async (
     ? await evaluateCoupon(couponCode, customerId, couponLines, productSubtotal)
     : null;
   const discount = coupon ? coupon.discount : 0;
-  const shippingCost = calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
-  const totalAmount = roundMoney(subtotal - discount + shippingCost);
+
+  // Admin discount applies after the coupon so the two never double-count. The
+  // utility already clamped to the eligible amount, so the final total stays >= 0.
+  const eligibleForAdminDiscount = Math.max(0, roundMoney(subtotal - discount));
+  const adminDiscount = adminDiscountInput
+    ? calculateAdminDiscount(adminDiscountInput, eligibleForAdminDiscount)
+    : null;
+  const adminDiscountAmount = adminDiscount ? adminDiscount.amount : 0;
+
+  // Store pickup: never charge shipping. Delivery: existing per-city rules on the
+  // amount after the coupon (admin discount does not change the shipping tier).
+  const shippingCost =
+    shippingInfo.fulfillmentMethod === "STORE_PICKUP"
+      ? 0
+      : calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
+  const totalAmount = roundMoney(Math.max(0, subtotal - discount - adminDiscountAmount + shippingCost));
 
   const cartItemIds = lines.map(({ item }) => item._id);
   const comboLines = lines
     .filter((l) => l.combo)
     .map((l) => ({ comboId: (l.combo as ComboDocument)._id, quantity: l.item.quantity }));
 
-  return { cart, cartItemIds, items, comboLines, subtotal, discount, coupon, shippingCost, totalAmount, shippingInfo };
+  // Pre-order aggregation: an order is pre-order when ANY product line is a pre-order product.
+  // Its promised delivery window is the longest among those lines, so the slowest item sets the ETA.
+  const preOrderProducts = lines
+    .map((l) => l.product)
+    .filter((p): p is ProductDocument => Boolean(p?.isPreOrder));
+  const isPreOrder = preOrderProducts.length > 0;
+  const preOrderMinDays = isPreOrder
+    ? Math.max(
+        ...preOrderProducts.map((p) => Math.max(p.preOrderMinDays || 0, PRE_ORDER.MIN_DELIVERY_DAYS))
+      )
+    : 0;
+  const expectedDeliveryDate = isPreOrder
+    ? new Date(Date.now() + preOrderMinDays * 24 * 60 * 60 * 1000)
+    : null;
+
+  return {
+    cart,
+    cartItemIds,
+    items,
+    comboLines,
+    subtotal,
+    discount,
+    coupon,
+    adminDiscount,
+    shippingCost,
+    totalAmount,
+    shippingInfo,
+    isPreOrder,
+    preOrderMinDays,
+    expectedDeliveryDate,
+  };
 };

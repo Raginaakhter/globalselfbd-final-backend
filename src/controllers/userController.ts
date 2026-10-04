@@ -96,7 +96,7 @@ export const getUsers = async (req: Request, res: Response) => {
   const search = queryString(req.query.search);
   if (isNonEmptyString(search)) {
     const pattern = new RegExp(escapeRegex(search.trim()), "i");
-    filter.$or = [{ fullName: pattern }, { email: pattern }];
+    filter.$or = [{ fullName: pattern }, { phoneNumber: pattern }, { email: pattern }];
   }
 
   const [users, total] = await Promise.all([
@@ -124,18 +124,39 @@ export const getUser = async (req: Request, res: Response) => {
   });
 };
 
-// @desc    Create a user with a role (e.g. staff accounts)
+// @desc    Create a user with a role (e.g. staff accounts).
+//          Needs at least ONE of phoneNumber / email as a login identifier (phone preferred).
 // @route   POST /api/users
 // @access  users.create
 export const createUser = async (req: Request, res: Response) => {
-  const { fullName, email, password, roleId } = (req.body || {}) as Body;
+  const body = (req.body || {}) as Body;
+  const { fullName, email, password, roleId } = body;
 
-  if (!isNonEmptyString(fullName) || !isNonEmptyString(email)) {
-    throw new AppError("Please provide full name and email", 400);
+  if (!isNonEmptyString(fullName)) {
+    throw new AppError("Please provide full name", 400);
   }
-  if (!EMAIL_REGEX.test(email)) {
-    throw new AppError("Please provide a valid email", 400);
+
+  const phoneRaw = body.phoneNumber ?? body.phone;
+  let phoneNumber = "";
+  if (phoneRaw !== undefined && phoneRaw !== null && phoneRaw !== "") {
+    if (typeof phoneRaw !== "string") throw new AppError("Phone number must be a string", 400);
+    const normalized = normalizeBdPhone(phoneRaw);
+    if (!normalized) throw new AppError("Please provide a valid Bangladeshi phone number", 400);
+    phoneNumber = normalized;
   }
+
+  let emailValue = "";
+  if (email !== undefined && email !== null && email !== "") {
+    if (!isNonEmptyString(email) || !EMAIL_REGEX.test(email)) {
+      throw new AppError("Please provide a valid email", 400);
+    }
+    emailValue = email.toLowerCase();
+  }
+
+  if (!phoneNumber && !emailValue) {
+    throw new AppError("Provide a phone number or an email so the user can log in", 400);
+  }
+
   if (typeof password !== "string" || password.length < 6) {
     throw new AppError("Password must be at least 6 characters", 400);
   }
@@ -148,20 +169,28 @@ export const createUser = async (req: Request, res: Response) => {
     if (!role) throw new AppError("Default Customer role is not available", 500);
   }
 
-  if (await User.exists({ email: email.toLowerCase() })) {
-    throw new AppError("User already exists with this email", 409);
+  if (phoneNumber && (await User.exists({ phoneNumber }))) {
+    throw new AppError("A user already exists with this phone number", 409);
+  }
+  if (emailValue && (await User.exists({ email: emailValue }))) {
+    throw new AppError("A user already exists with this email", 409);
   }
 
-  const user = await User.create({ fullName, email, password, role: role._id });
+  const user = await User.create({
+    fullName,
+    phoneNumber,
+    email: emailValue,
+    password,
+    role: role._id,
+  });
 
   await logActivity(req, {
     action: "USER_CREATED",
     targetUserId: user._id,
     targetRoleId: role._id,
-    newValue: { fullName: user.fullName, email: user.email, role: role.name },
+    newValue: { fullName: user.fullName, phoneNumber: user.phoneNumber, email: user.email, role: role.name },
   });
 
-  // toJSON strips the password and other private fields
   res.status(201).json({
     success: true,
     message: "User created successfully",
@@ -203,48 +232,56 @@ export const changeUserRole = async (req: Request, res: Response) => {
   });
 };
 
-// @desc    Edit another user's details (name, email, phone). Passwords are never set here:
-//          users change their own password with forgot-password (email OTP).
+// @desc    Edit another user's details (name, phoneNumber, email). Passwords are never set here:
+//          users change their own password with forgot-password → OTP.
 // @route   PUT /api/users/:id
 // @access  users.update
 export const updateUser = async (req: Request, res: Response) => {
-  const { fullName, email, phone } = (req.body || {}) as Body;
-  if (fullName === undefined && email === undefined && phone === undefined) {
-    throw new AppError("Send at least one field to update: fullName, email or phone", 400);
+  const body = (req.body || {}) as Body;
+  const { fullName, email } = body;
+  const phoneRaw = body.phoneNumber ?? body.phone;
+  if (fullName === undefined && email === undefined && phoneRaw === undefined) {
+    throw new AppError("Send at least one field to update: fullName, phoneNumber or email", 400);
   }
 
   const user = await findUserOr404(req.params.id);
-  // Not yourself (use PUT /api/auth/me) and not someone with more permissions than you
   await assertCanManageUser(req, user);
 
-  const before = { fullName: user.fullName, email: user.email, phone: user.phone };
+  const before = { fullName: user.fullName, phoneNumber: user.phoneNumber, email: user.email };
 
   if (fullName !== undefined) {
     if (!isNonEmptyString(fullName)) throw new AppError("Full name cannot be empty", 400);
     if (fullName.trim().length > 100) throw new AppError("Full name cannot exceed 100 characters", 400);
     user.fullName = fullName.trim();
   }
-  if (email !== undefined) {
-    if (!isNonEmptyString(email) || !EMAIL_REGEX.test(email)) throw new AppError("Please provide a valid email", 400);
-    const newEmail = email.trim().toLowerCase();
-    if (newEmail !== user.email && (await User.exists({ email: newEmail, _id: { $ne: user._id } }))) {
-      throw new AppError("This email is already used by another account", 409);
-    }
-    user.email = newEmail;
-  }
-  if (phone !== undefined) {
-    if (phone === null || phone === "") {
-      user.phone = "";
+  if (phoneRaw !== undefined) {
+    if (phoneRaw === null || phoneRaw === "") {
+      user.phoneNumber = "";
     } else {
-      const normalized = typeof phone === "string" ? normalizeBdPhone(phone) : null;
-      if (!normalized) throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
-      user.phone = normalized;
+      const normalized = typeof phoneRaw === "string" ? normalizeBdPhone(phoneRaw) : null;
+      if (!normalized) throw new AppError("Please provide a valid Bangladeshi phone number", 400);
+      if (normalized !== user.phoneNumber && (await User.exists({ phoneNumber: normalized, _id: { $ne: user._id } }))) {
+        throw new AppError("This phone number is already used by another account", 409);
+      }
+      user.phoneNumber = normalized;
+    }
+  }
+  if (email !== undefined) {
+    if (email === null || email === "") {
+      user.email = "";
+    } else {
+      if (!isNonEmptyString(email) || !EMAIL_REGEX.test(email)) throw new AppError("Please provide a valid email", 400);
+      const newEmail = email.trim().toLowerCase();
+      if (newEmail !== user.email && (await User.exists({ email: newEmail, _id: { $ne: user._id } }))) {
+        throw new AppError("This email is already used by another account", 409);
+      }
+      user.email = newEmail;
     }
   }
 
   await user.save({ validateBeforeSave: false });
 
-  const after = { fullName: user.fullName, email: user.email, phone: user.phone };
+  const after = { fullName: user.fullName, phoneNumber: user.phoneNumber, email: user.email };
   if (JSON.stringify(before) !== JSON.stringify(after)) {
     await logActivity(req, { action: "USER_UPDATED", targetUserId: user._id, oldValue: before, newValue: after });
   }
@@ -313,6 +350,7 @@ export const deleteUser = async (req: Request, res: Response) => {
     targetRoleId: user.role?._id,
     oldValue: {
       fullName: user.fullName,
+      phoneNumber: user.phoneNumber,
       email: user.email,
       role: user.role?.name,
       status: user.status,

@@ -39,6 +39,7 @@ import {
   type Size,
   type Unit,
 } from "../config/productOptions";
+import { PRE_ORDER } from "../config/orderOptions";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 
@@ -89,6 +90,8 @@ type ProductFields = Partial<
     | "gallery"
     | "status"
     | "slug"
+    | "isPreOrder"
+    | "preOrderMinDays"
   >
 > & { categoryId?: string };
 
@@ -200,10 +203,38 @@ const parseProductFields = (body: Body): ProductFields => {
     out.status = body.status;
   }
 
+  if (body.isPreOrder !== undefined) {
+    out.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
+  }
+  if (body.preOrderMinDays !== undefined) {
+    if (isBlank(body.preOrderMinDays)) {
+      out.preOrderMinDays = 0;
+    } else {
+      const days = toNumber(body.preOrderMinDays, "preOrderMinDays");
+      if (!Number.isInteger(days) || days < 0 || days > PRE_ORDER.MAX_DELIVERY_DAYS) {
+        throw new AppError(
+          `preOrderMinDays must be a whole number between 0 and ${PRE_ORDER.MAX_DELIVERY_DAYS}`,
+          400
+        );
+      }
+      out.preOrderMinDays = days;
+    }
+  }
+
   return out;
 };
 
-type RuleFields = Pick<IProduct, "customerSpecialPrice" | "customerSellPrice" | "unit" | "quantity" | "isFabric" | "sizes">;
+type RuleFields = Pick<
+  IProduct,
+  | "customerSpecialPrice"
+  | "customerSellPrice"
+  | "unit"
+  | "quantity"
+  | "isFabric"
+  | "sizes"
+  | "isPreOrder"
+  | "preOrderMinDays"
+>;
 
 // Rules that depend on several fields; runs on the final (merged) product
 const validateProductRules = (p: RuleFields): void => {
@@ -224,6 +255,19 @@ const validateProductRules = (p: RuleFields): void => {
   } else {
     // Sizes are fabric-only configuration
     p.sizes = [];
+  }
+
+  // Pre-order: the business floor is 15 days; admins can go higher but never lower.
+  if (p.isPreOrder) {
+    if (!p.preOrderMinDays || p.preOrderMinDays < PRE_ORDER.MIN_DELIVERY_DAYS) {
+      throw new AppError(
+        `Pre-order minimum delivery days must be at least ${PRE_ORDER.MIN_DELIVERY_DAYS}`,
+        400
+      );
+    }
+  } else {
+    // Keep the stored value clean when pre-order is off.
+    p.preOrderMinDays = 0;
   }
 };
 
@@ -379,6 +423,8 @@ export const createProduct = async (req: Request, res: Response) => {
     quantity: null,
     gallery: [],
     status: "ACTIVE" as const,
+    isPreOrder: false,
+    preOrderMinDays: 0,
     ...fields,
   } as ProductFields & RuleFields & { categoryId: string; productTitle: string };
   validateProductRules(product);
@@ -673,6 +719,64 @@ export const bulkRemoveDiscount = async (req: Request, res: Response) => {
       matched: result.matchedCount,
       modified: result.modifiedCount,
     },
+  });
+};
+
+// @desc    Enable/disable pre-order on a product (and set its minimum delivery days).
+//          Admin-only quick toggle, separate from the general edit so dashboards can expose it
+//          as a dedicated switch. Enforces the 15-day business floor every time.
+// @route   PATCH /api/products/:id/pre-order
+// @access  products.update
+export const updateProductPreOrder = async (req: Request, res: Response) => {
+  const product = await findProductOr404(req.params.id);
+  const body = (req.body || {}) as Body;
+
+  if (body.isPreOrder === undefined && body.preOrderMinDays === undefined) {
+    throw new AppError("Send isPreOrder and/or preOrderMinDays", 400);
+  }
+
+  const before = { isPreOrder: product.isPreOrder, preOrderMinDays: product.preOrderMinDays };
+
+  if (body.isPreOrder !== undefined) {
+    product.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
+  }
+  if (body.preOrderMinDays !== undefined) {
+    if (isBlank(body.preOrderMinDays)) {
+      product.preOrderMinDays = 0;
+    } else {
+      const days = toNumber(body.preOrderMinDays, "preOrderMinDays");
+      if (!Number.isInteger(days) || days < 0 || days > PRE_ORDER.MAX_DELIVERY_DAYS) {
+        throw new AppError(
+          `preOrderMinDays must be a whole number between 0 and ${PRE_ORDER.MAX_DELIVERY_DAYS}`,
+          400
+        );
+      }
+      product.preOrderMinDays = days;
+    }
+  }
+
+  if (product.isPreOrder && product.preOrderMinDays < PRE_ORDER.MIN_DELIVERY_DAYS) {
+    throw new AppError(
+      `Pre-order minimum delivery days must be at least ${PRE_ORDER.MIN_DELIVERY_DAYS}`,
+      400
+    );
+  }
+  if (!product.isPreOrder) product.preOrderMinDays = 0;
+
+  await product.save();
+
+  await logActivity(req, {
+    action: "PRODUCT_PRE_ORDER_UPDATED",
+    oldValue: { productId: product._id, ...before },
+    newValue: { isPreOrder: product.isPreOrder, preOrderMinDays: product.preOrderMinDays },
+  });
+
+  const populated = await product.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
+
+  res.status(200).json({
+    success: true,
+    message: `Pre-order ${product.isPreOrder ? "enabled" : "disabled"}`,
+    data: toProductResponse(asProductLike(populated), getProductVisibility(req.permissions)),
   });
 };
 

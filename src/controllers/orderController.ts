@@ -8,11 +8,17 @@ import { nextSequence } from "../models/Counter";
 import AppError from "../utils/AppError";
 import { logActivity } from "../utils/activityLog";
 import { getPagination, queryString } from "../utils/validators";
-import { parseShippingInfo, buildOrderDraft, type OrderDraft } from "../utils/checkout";
+import {
+  parseShippingInfo,
+  parseAdminDiscountInput,
+  buildOrderDraft,
+  type OrderDraft,
+  type AdminDiscountInput,
+} from "../utils/checkout";
 import { decrementStock } from "../utils/inventory";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { notifyOrderEvent } from "../utils/orderEmails";
-import { getAuthUser } from "../middleware/auth";
+import { getAuthUser, loadPermissions } from "../middleware/auth";
 import { claimCoupon, normalizeCouponCode } from "../utils/coupons";
 import {
   ORDER_STATUSES,
@@ -48,6 +54,15 @@ const toSummary = (draft: OrderDraft) => ({
         discount: draft.coupon.discount,
       }
     : null,
+  adminDiscount: draft.adminDiscount
+    ? {
+        type: draft.adminDiscount.type,
+        value: draft.adminDiscount.value,
+        amount: draft.adminDiscount.amount,
+        eligibleSubtotal: draft.adminDiscount.eligibleSubtotal,
+      }
+    : null,
+  fulfillmentMethod: draft.shippingInfo.fulfillmentMethod,
   shippingCost: draft.shippingCost,
   totalAmount: draft.totalAmount,
   paymentMethod: draft.shippingInfo.paymentMethod,
@@ -62,17 +77,40 @@ const toSummary = (draft: OrderDraft) => ({
   },
 });
 
+// Decide whether the admin-discount fields in the request can be honored.
+// Never trust a role-name claim from the client: this reads the server's own
+// req.permissions set that authorize/requirePermission populated.
+const resolveAdminDiscount = async (
+  req: Request,
+  requestedAdminDiscount: AdminDiscountInput | null
+): Promise<AdminDiscountInput | null> => {
+  if (!requestedAdminDiscount) return null;
+  const permissions = await loadPermissions(req);
+  if (!permissions.has("orders.adminDiscount")) {
+    throw new AppError("You are not allowed to apply an admin discount", 403);
+  }
+  return requestedAdminDiscount;
+};
+
 // @desc    Checkout: validate cart + shipping + payment and return the order summary (nothing is saved)
 // @route   POST /api/orders/checkout
 // @access  orders.create
 export const checkout = async (req: Request, res: Response) => {
   const shippingInfo = parseShippingInfo(req.body);
-  const draft = await buildOrderDraft(getAuthUser(req)._id, shippingInfo, normalizeCouponCode(req.body?.couponCode));
+  const adminDiscount = await resolveAdminDiscount(req, parseAdminDiscountInput(req.body));
+  const draft = await buildOrderDraft(getAuthUser(req)._id, shippingInfo, {
+    couponCode: normalizeCouponCode(req.body?.couponCode),
+    adminDiscount,
+  });
 
   res.status(200).json({
     success: true,
     message: "Checkout summary",
-    data: toSummary(draft),
+    data: {
+      ...toSummary(draft),
+      // So the frontend can decide whether to render the admin-discount controls at all
+      canUseAdminDiscount: (await loadPermissions(req)).has("orders.adminDiscount"),
+    },
   });
 };
 
@@ -83,7 +121,11 @@ export const checkout = async (req: Request, res: Response) => {
 export const createOrder = async (req: Request, res: Response) => {
   const customer = getAuthUser(req);
   const shippingInfo = parseShippingInfo(req.body);
-  const draft = await buildOrderDraft(customer._id, shippingInfo, normalizeCouponCode(req.body?.couponCode));
+  const adminDiscount = await resolveAdminDiscount(req, parseAdminDiscountInput(req.body));
+  const draft = await buildOrderDraft(customer._id, shippingInfo, {
+    couponCode: normalizeCouponCode(req.body?.couponCode),
+    adminDiscount,
+  });
   const { cartItemIds } = draft;
 
   const session = await mongoose.startSession();
@@ -106,7 +148,14 @@ export const createOrder = async (req: Request, res: Response) => {
             discount: draft.discount,
             couponId: draft.coupon?.coupon._id ?? null,
             couponCode: draft.coupon?.code ?? null,
+            fulfillmentMethod: shippingInfo.fulfillmentMethod,
             shippingCost: draft.shippingCost,
+            adminDiscountType: draft.adminDiscount?.type ?? null,
+            adminDiscountValue: draft.adminDiscount?.value ?? 0,
+            adminDiscountAmount: draft.adminDiscount?.amount ?? 0,
+            isPreOrder: draft.isPreOrder,
+            preOrderMinDays: draft.preOrderMinDays,
+            expectedDeliveryDate: draft.expectedDeliveryDate,
             totalAmount: draft.totalAmount,
             paymentMethod: shippingInfo.paymentMethod,
             shippingName: shippingInfo.customerName,
@@ -128,10 +177,13 @@ export const createOrder = async (req: Request, res: Response) => {
         { session }
       );
 
-      // Aggregate per-product requested stock from both product lines AND combo member lines
+      // Aggregate per-product requested stock from product lines AND combo member lines.
+      // Pre-order product lines are intentionally skipped: those are fulfilled from incoming
+      // supplier shipments after the delivery window and do not consume current stock.
       const stockNeeded = new Map<string, number>();
       for (const item of draft.items) {
         if (item.productId) {
+          if (item.isPreOrder) continue;
           const key = String(item.productId);
           stockNeeded.set(key, (stockNeeded.get(key) || 0) + item.quantity);
         } else if (item.comboId) {
@@ -215,6 +267,8 @@ export const getMyOrders = async (req: Request, res: Response) => {
           paymentMethod: o.paymentMethod,
           paymentStatus: o.paymentStatus,
           orderStatus: o.orderStatus,
+          isPreOrder: o.isPreOrder ?? false,
+          expectedDeliveryDate: o.expectedDeliveryDate ?? null,
           createdAt: o.createdAt,
         };
       }),

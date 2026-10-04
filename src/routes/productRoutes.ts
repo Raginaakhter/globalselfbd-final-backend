@@ -9,6 +9,7 @@ import {
   updateProductStatus,
   updateProductStock,
   updateProductGallery,
+  updateProductPreOrder,
   deleteProduct,
   bulkApplyDiscount,
   bulkRemoveDiscount,
@@ -36,6 +37,7 @@ router.put("/:id", authenticate, requirePermission("products.update"), updatePro
 router.patch("/:id/status", authenticate, requirePermission("products.update"), updateProductStatus);
 router.patch("/:id/stock", authenticate, requirePermission("inventory.update"), updateProductStock);
 router.patch("/:id/gallery", authenticate, requirePermission("products.update"), updateProductGallery);
+router.patch("/:id/pre-order", authenticate, requirePermission("products.update"), updateProductPreOrder);
 router.delete("/:id", authenticate, requirePermission("products.delete"), deleteProduct);
 
 export default router;

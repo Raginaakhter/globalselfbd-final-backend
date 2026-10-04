@@ -22,11 +22,13 @@ import {
   ORDER_TRANSITIONS,
   PAYMENT_STATUSES,
   PAYMENT_TRANSITIONS,
+  PRE_ORDER,
   isOrderStatus,
   isPaymentStatus,
   type OrderStatus,
   type PaymentStatus,
 } from "../config/orderOptions";
+import { getAuthUser } from "../middleware/auth";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 
@@ -34,13 +36,27 @@ type Body = Record<string, unknown>;
 
 // Record when an order reached a step (used by the sales/payment reports)
 const statusTimestamp = (status: OrderStatus): Record<string, Date> => {
-  const field = ({ CONFIRMED: "confirmedAt", SHIPPED: "shippedAt", DELIVERED: "deliveredAt" } as Partial<Record<OrderStatus, string>>)[status];
+  const field = (
+    {
+      CONFIRMED: "confirmedAt",
+      READY_TO_SHIP: "readyToShipAt",
+      SHIPPED: "shippedAt",
+      OUT_FOR_DELIVERY: "outForDeliveryAt",
+      DELIVERED: "deliveredAt",
+    } as Partial<Record<OrderStatus, string>>
+  )[status];
   return field ? { [field]: new Date() } : {};
 };
-// A refund gives back only the product price (after discount): the delivery charge has gone to the shipping company
-const paymentTimestamp = (status: PaymentStatus, order: { subtotal: number; discount: number }): Record<string, Date | number | null> => {
+// A refund gives back only the product price (after every discount): the delivery charge has gone to the shipping company
+const paymentTimestamp = (
+  status: PaymentStatus,
+  order: { subtotal: number; discount: number; adminDiscountAmount?: number }
+): Record<string, Date | number | null> => {
   if (status === "PAID") return { paidAt: new Date(), refundedAt: null, refundAmount: 0 };
-  if (status === "REFUNDED") return { refundedAt: new Date(), refundAmount: Math.round((order.subtotal - order.discount) * 100) / 100 };
+  if (status === "REFUNDED") {
+    const refundable = order.subtotal - order.discount - (order.adminDiscountAmount || 0);
+    return { refundedAt: new Date(), refundAmount: Math.max(0, Math.round(refundable * 100) / 100) };
+  }
   return {};
 };
 
@@ -66,7 +82,15 @@ export const getAllOrders = async (req: Request, res: Response) => {
   const customerId = queryString(req.query.customerId);
   const fromDate = queryString(req.query.fromDate);
   const toDate = queryString(req.query.toDate);
+  // Order type: "preOrder" shows only pre-orders, "normal" shows only non-pre-order; absent = all.
+  const type = queryString(req.query.type);
   const filter: Record<string, unknown> = {};
+
+  if (type) {
+    if (type === "preOrder") filter.isPreOrder = true;
+    else if (type === "normal") filter.isPreOrder = { $ne: true };
+    else throw new AppError('type must be "preOrder" or "normal"', 400);
+  }
 
   if (status) {
     if (!isOrderStatus(status)) {
@@ -94,9 +118,9 @@ export const getAllOrders = async (req: Request, res: Response) => {
     filter.createdAt = range;
   }
   if (isNonEmptyString(search)) {
-    // Order number, customer name, phone, email (shipping email or account email)
+    // Order number, customer name, phone (shipping and account), email (shipping and account)
     const pattern = new RegExp(escapeRegex(search.trim()), "i");
-    const accountIds = await User.find({ email: pattern }).distinct("_id");
+    const accountIds = await User.find({ $or: [{ phoneNumber: pattern }, { email: pattern }] }).distinct("_id");
     filter.$or = [
       { orderNumber: pattern },
       { shippingName: pattern },
@@ -129,11 +153,16 @@ export const getAllOrders = async (req: Request, res: Response) => {
           totalQuantity: items.reduce((sum, i) => sum + i.quantity, 0),
           subtotal: o.subtotal,
           discount: o.discount,
+          adminDiscountAmount: o.adminDiscountAmount ?? 0,
+          fulfillmentMethod: o.fulfillmentMethod,
           shippingCost: o.shippingCost,
           totalAmount: o.totalAmount,
           paymentMethod: o.paymentMethod,
           paymentStatus: o.paymentStatus,
           orderStatus: o.orderStatus,
+          isPreOrder: o.isPreOrder ?? false,
+          preOrderMinDays: o.preOrderMinDays ?? 0,
+          expectedDeliveryDate: o.expectedDeliveryDate ?? null,
           createdAt: o.createdAt,
         };
       }),
@@ -149,7 +178,7 @@ export const getOrderDetails = async (req: Request, res: Response) => {
   const order = await findOrderOr404(String(req.params.id));
   const [items, customer] = await Promise.all([
     OrderItem.find({ orderId: order._id }).lean(),
-    User.findById(order.customerId).select("fullName email").lean(),
+    User.findById(order.customerId).select("fullName phoneNumber email").lean(),
   ]);
 
   res.status(200).json({
@@ -185,7 +214,21 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 
   let updated: OrderDocument | null;
   if (status === ORDER_STATUS.CANCELLED) {
-    updated = await cancelOrder(order); // also restores stock
+    const reasonRaw = (req.body as Body)?.cancellationReason;
+    if (reasonRaw !== undefined && reasonRaw !== null && typeof reasonRaw !== "string") {
+      throw new AppError("cancellationReason must be text", 400);
+    }
+    const reason = typeof reasonRaw === "string" ? reasonRaw.trim() : "";
+    if (reason.length > PRE_ORDER.CANCELLATION_REASON_MAX) {
+      throw new AppError(
+        `cancellationReason cannot exceed ${PRE_ORDER.CANCELLATION_REASON_MAX} characters`,
+        400
+      );
+    }
+    updated = await cancelOrder(order, {
+      reason: reason || null,
+      cancelledBy: getAuthUser(req)._id,
+    });
   } else {
     // Only update if nobody changed the status in the meantime
     updated = await Order.findOneAndUpdate(
@@ -336,5 +379,108 @@ export const deleteOrder = async (req: Request, res: Response) => {
     success: true,
     message: "Order deleted successfully",
     data: { _id: order._id, orderNumber: order.orderNumber },
+  });
+};
+
+// @desc    Edit the pre-order promise on an order: minimum days, expected delivery date, or both.
+//          The 15-day floor applies when minDays is set; the date is also validated to be in the future.
+//          Does NOT re-derive the date from current product settings — the order keeps its own snapshot.
+// @route   PATCH /api/admin/orders/:id/pre-order
+// @access  orders.update
+export const updatePreOrderFields = async (req: Request, res: Response) => {
+  const order = await findOrderOr404(String(req.params.id));
+  const body = (req.body || {}) as Body;
+
+  if (!order.isPreOrder) {
+    throw new AppError("This order is not a pre-order", 400);
+  }
+
+  if (body.preOrderMinDays === undefined && body.expectedDeliveryDate === undefined) {
+    throw new AppError("Send preOrderMinDays and/or expectedDeliveryDate", 400);
+  }
+
+  const before = {
+    preOrderMinDays: order.preOrderMinDays,
+    expectedDeliveryDate: order.expectedDeliveryDate,
+  };
+
+  if (body.preOrderMinDays !== undefined) {
+    const n = typeof body.preOrderMinDays === "string" ? Number(body.preOrderMinDays) : body.preOrderMinDays;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < PRE_ORDER.MIN_DELIVERY_DAYS || n > PRE_ORDER.MAX_DELIVERY_DAYS) {
+      throw new AppError(
+        `preOrderMinDays must be a whole number between ${PRE_ORDER.MIN_DELIVERY_DAYS} and ${PRE_ORDER.MAX_DELIVERY_DAYS}`,
+        400
+      );
+    }
+    order.preOrderMinDays = n;
+    // Re-base the expected delivery from the order's own placement date, keeping the snapshot principle.
+    order.expectedDeliveryDate = new Date(order.createdAt.getTime() + n * 24 * 60 * 60 * 1000);
+  }
+
+  if (body.expectedDeliveryDate !== undefined) {
+    const raw = body.expectedDeliveryDate;
+    if (raw === null || raw === "") {
+      throw new AppError("expectedDeliveryDate cannot be cleared", 400);
+    }
+    const date = typeof raw === "string" || typeof raw === "number" ? new Date(raw) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      throw new AppError("expectedDeliveryDate must be a valid date", 400);
+    }
+    if (date <= new Date()) {
+      throw new AppError("expectedDeliveryDate must be in the future", 400);
+    }
+    order.expectedDeliveryDate = date;
+  }
+
+  await order.save();
+
+  await logActivity(req, {
+    action: "ORDER_PRE_ORDER_UPDATED",
+    targetOrderId: order._id,
+    oldValue: before,
+    newValue: {
+      preOrderMinDays: order.preOrderMinDays,
+      expectedDeliveryDate: order.expectedDeliveryDate,
+    },
+  });
+
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+  res.status(200).json({
+    success: true,
+    message: "Pre-order details updated",
+    data: toOrderResponse(order, items),
+  });
+};
+
+// @desc    Append an internal admin note to an order (visible only in admin dashboards).
+//          Notes are append-only; previous notes are never overwritten so the audit trail stays intact.
+// @route   POST /api/admin/orders/:id/notes
+// @access  orders.update
+export const addAdminNote = async (req: Request, res: Response) => {
+  const { note } = (req.body || {}) as Body;
+  if (typeof note !== "string" || !note.trim()) {
+    throw new AppError("note is required", 400);
+  }
+  if (note.length > PRE_ORDER.ADMIN_NOTE_MAX) {
+    throw new AppError(`note cannot exceed ${PRE_ORDER.ADMIN_NOTE_MAX} characters`, 400);
+  }
+
+  const order = await findOrderOr404(String(req.params.id));
+  const addedBy = getAuthUser(req)._id;
+  const entry = { note: note.trim(), addedBy, addedAt: new Date() };
+  order.adminNotes.push(entry);
+  await order.save();
+
+  await logActivity(req, {
+    action: "ORDER_ADMIN_NOTE_ADDED",
+    targetOrderId: order._id,
+    newValue: { noteCount: order.adminNotes.length },
+  });
+
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+  res.status(200).json({
+    success: true,
+    message: "Admin note added",
+    data: toOrderResponse(order, items),
   });
 };

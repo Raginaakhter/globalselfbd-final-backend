@@ -13,7 +13,8 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   banners: ["view", "create", "update", "delete"],
   inventory: ["view", "create", "update"],
   // orders.view = own orders (customers); orders.viewAll = every customer's orders (admin panel)
-  orders: ["view", "create", "update", "delete", "viewAll", "status", "paymentStatus"],
+  // orders.adminDiscount = may apply a manual discount at checkout (admin only; never granted to Customer)
+  orders: ["view", "create", "update", "delete", "viewAll", "status", "paymentStatus", "adminDiscount"],
   cart: ["manage"],
   payments: ["view", "update"],
   invoices: ["view", "create"],

@@ -4,10 +4,12 @@ import Product from "../models/Product";
 import type { CategoryDocument } from "../models/Category";
 import Combo from "../models/Combo";
 import Offer, { offerState, type IOffer } from "../models/Offer";
+import Order from "../models/Order";
+import OrderItem from "../models/OrderItem";
 import AppError from "../utils/AppError";
 import { toProductResponse, type ProductLike } from "../utils/productView";
 import { loadCategoryMap, getAncestry, getVisibleCategoryIds } from "../utils/categoryTree";
-import { getPagination, isNonEmptyString, queryString, escapeRegex } from "../utils/validators";
+import { getPagination, isNonEmptyString, queryString, escapeRegex, normalizeBdPhone } from "../utils/validators";
 import { toComboItemDetails, toComboResponse } from "../utils/combos";
 import { listProducts } from "./productController";
 
@@ -238,6 +240,83 @@ export const getPublicProduct = async (req: Request, res: Response) => {
     data: {
       ...toProductResponse(product as unknown as { toObject(): ProductLike }, CUSTOMER_VIEW),
       breadcrumb: getAncestry(product.categoryId._id, map).map((c) => ({ _id: c._id, name: c.name, slug: c.slug })),
+    },
+  });
+};
+
+// @desc    Track an order with phone number + order number (no login required).
+//          Phone must match the order's shipping phone; a mismatch is reported as "not found"
+//          to prevent probing which order numbers exist.
+// @route   POST /api/public/orders/track
+// @access  Public
+export const trackOrder = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+  const phoneRaw = body.phoneNumber ?? body.phone;
+  const orderRaw = body.orderNumber ?? body.orderId;
+
+  if (typeof phoneRaw !== "string" || !phoneRaw.trim()) {
+    throw new AppError("Phone number is required", 400);
+  }
+  if (typeof orderRaw !== "string" || !orderRaw.trim()) {
+    throw new AppError("Order number is required", 400);
+  }
+
+  const phoneNumber = normalizeBdPhone(phoneRaw);
+  if (!phoneNumber) {
+    throw new AppError("Please provide a valid Bangladeshi phone number", 400);
+  }
+
+  const orderNumber = orderRaw.trim().toUpperCase();
+  const order = await Order.findOne({ orderNumber, shippingPhone: phoneNumber }).lean();
+  // Same "not found" message either way so a wrong phone cannot be used to probe order numbers
+  if (!order) throw new AppError("No order was found with this phone number and order number", 404);
+
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+
+  res.status(200).json({
+    success: true,
+    message: "Order fetched successfully",
+    data: {
+      orderNumber: order.orderNumber,
+      orderStatus: order.orderStatus,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      fulfillmentMethod: order.fulfillmentMethod,
+      subtotal: order.subtotal,
+      discount: order.discount,
+      adminDiscountAmount: order.adminDiscountAmount ?? 0,
+      shippingCost: order.shippingCost,
+      totalAmount: order.totalAmount,
+      isPreOrder: order.isPreOrder ?? false,
+      preOrderMinDays: order.preOrderMinDays ?? 0,
+      expectedDeliveryDate: order.expectedDeliveryDate ?? null,
+      cancellationReason: order.cancellationReason ?? null,
+      itemCount: items.length,
+      items: items.map((i) => ({
+        productTitle: i.productTitleSnapshot,
+        thumbnail: i.thumbnailSnapshot,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+        isPreOrder: i.isPreOrder ?? false,
+      })),
+      shippingInformation: {
+        name: order.shippingName,
+        phone: order.shippingPhone,
+        address: order.shippingAddress,
+        city: order.shippingCity,
+        area: order.shippingArea,
+      },
+      // Full step-by-step timeline so the UI can render a progress tracker without reading dates
+      timeline: {
+        placedAt: order.createdAt,
+        confirmedAt: order.confirmedAt,
+        readyToShipAt: order.readyToShipAt ?? null,
+        shippedAt: order.shippedAt,
+        outForDeliveryAt: order.outForDeliveryAt ?? null,
+        deliveredAt: order.deliveredAt,
+        cancelledAt: order.cancelledAt,
+      },
     },
   });
 };
