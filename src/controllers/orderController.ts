@@ -15,12 +15,15 @@ import {
   type OrderDraft,
   type AdminDiscountInput,
 } from "../utils/checkout";
-import { decrementStock } from "../utils/inventory";
+import { reserveStock } from "../utils/inventory";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
-import { notifyOrderEvent } from "../utils/orderEmails";
+import { notifyOrderPlaced } from "../utils/orderEmails";
 import { getAuthUser, loadPermissions } from "../middleware/auth";
 import { claimCoupon, normalizeCouponCode } from "../utils/coupons";
+import { buildGuestOrderDraft, findOrCreateGuestCustomer } from "../utils/guestCheckout";
+import { normalizeBdPhone } from "../utils/validators";
 import {
+  ORDER_STATUS,
   ORDER_STATUSES,
   ORDER_NUMBER_PREFIX,
   ORDER_NUMBER_START,
@@ -92,6 +95,42 @@ const resolveAdminDiscount = async (
   return requestedAdminDiscount;
 };
 
+// @desc    Lightweight stock-only re-check before the final order submit. Walks the
+//          cart with current product stock, returns `ok` + per-line issues.
+//          Does NOT touch the cart or create any order.
+// @route   POST /api/orders/validate-stock
+// @access  orders.create
+export const validateCheckoutStock = async (req: Request, res: Response) => {
+  const customer = getAuthUser(req);
+  try {
+    await buildOrderDraft(customer._id, {
+      // Use dummy-but-valid shipping to satisfy the draft validator — the exact
+      // values do not matter for stock validation, only cart contents.
+      customerName: "stock-check",
+      phoneNumber: "01700000000",
+      email: null,
+      shippingAddress: "stock-check",
+      city: "Dhaka",
+      area: "stock-check",
+      orderNotes: "",
+      paymentMethod: "CASH_ON_DELIVERY",
+      fulfillmentMethod: "DELIVERY",
+    });
+    return res.status(200).json({
+      success: true,
+      message: "All cart items can be ordered",
+      data: { ok: true },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Stock check failed";
+    return res.status(200).json({
+      success: true,
+      message,
+      data: { ok: false, reason: message },
+    });
+  }
+};
+
 // @desc    Checkout: validate cart + shipping + payment and return the order summary (nothing is saved)
 // @route   POST /api/orders/checkout
 // @access  orders.create
@@ -144,6 +183,10 @@ export const createOrder = async (req: Request, res: Response) => {
           {
             orderNumber: `${ORDER_NUMBER_PREFIX}${seq}`,
             customerId: customer._id,
+            // New flow: orders are CONFIRMED on placement (no manual admin
+            // approval step), so timestamp the confirmation here as well.
+            orderStatus: "CONFIRMED" as const,
+            confirmedAt: new Date(),
             subtotal: draft.subtotal,
             discount: draft.discount,
             couponId: draft.coupon?.coupon._id ?? null,
@@ -194,7 +237,7 @@ export const createOrder = async (req: Request, res: Response) => {
         }
       }
       for (const [productId, quantity] of stockNeeded) {
-        await decrementStock(productId, quantity, session);
+        await reserveStock(productId, quantity, session, { orderId: order._id, createdBy: customer._id });
       }
 
       // Update combo analytics (sold count, revenue)
@@ -217,7 +260,8 @@ export const createOrder = async (req: Request, res: Response) => {
   const created: OrderDocument = order;
 
   const items = await OrderItem.find({ orderId: created._id }).lean();
-  notifyOrderEvent("PLACED", created, items);
+  // Channel-routed order confirmation: SMS for phone-first accounts, email for email-first.
+  notifyOrderPlaced(created, items);
   await logActivity(req, {
     action: "ORDER_CREATED",
     targetOrderId: created._id,
@@ -306,10 +350,194 @@ export const cancelMyOrder = async (req: Request, res: Response) => {
   });
 
   const items = await OrderItem.find({ orderId: order._id }).lean();
-  notifyOrderEvent("CANCELLED", cancelled, items);
+  // Simplified flow: no cancellation email — customers only receive the
+  // confirmation (on placement) and the delivery+review message (on DELIVERED).
   res.status(200).json({
     success: true,
     message: "Order cancelled successfully",
     data: toOrderResponse(cancelled, items),
+  });
+};
+
+// @desc    Guest checkout — place an order without logging in. Items are sent
+//          directly in the body (no cart). The server finds or auto-creates a
+//          passive customer account by phone so the order is still linked to a
+//          user. The customer may later claim that account by OTP-login with
+//          the same phone and will see this order in their history.
+// @route   POST /api/orders/guest
+// @access  Public
+export const createGuestOrder = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Record<string, unknown>;
+
+  // Find or create the customer FIRST so we can thread their id through the
+  // rest of the draft (coupon rules + reservation + order creation).
+  const phoneNumber = typeof body.phoneNumber === "string" ? body.phoneNumber : "";
+  const customer = await findOrCreateGuestCustomer(phoneNumber, {
+    fullName: typeof body.customerName === "string" ? body.customerName.trim() : "",
+    email: typeof body.email === "string" && body.email.trim() ? body.email.trim() : null,
+  });
+
+  const draft = await buildGuestOrderDraft(customer._id, body);
+
+  const session = await mongoose.startSession();
+  let order: OrderDocument | undefined;
+  try {
+    await session.withTransaction(async () => {
+      const seq = await nextSequence("order", ORDER_NUMBER_START, session);
+      [order] = await Order.create(
+        [
+          {
+            orderNumber: `${ORDER_NUMBER_PREFIX}${seq}`,
+            customerId: customer._id,
+            orderStatus: ORDER_STATUS.CONFIRMED,
+            confirmedAt: new Date(),
+            subtotal: draft.subtotal,
+            discount: draft.discount,
+            couponId: draft.coupon?.coupon._id ?? null,
+            couponCode: draft.coupon?.code ?? null,
+            fulfillmentMethod: draft.shippingInfo.fulfillmentMethod,
+            shippingCost: draft.shippingCost,
+            adminDiscountType: draft.adminDiscount?.type ?? null,
+            adminDiscountValue: draft.adminDiscount?.value ?? 0,
+            adminDiscountAmount: draft.adminDiscount?.amount ?? 0,
+            isPreOrder: draft.isPreOrder,
+            preOrderMinDays: draft.preOrderMinDays,
+            expectedDeliveryDate: draft.expectedDeliveryDate,
+            totalAmount: draft.totalAmount,
+            paymentMethod: draft.shippingInfo.paymentMethod,
+            shippingName: draft.shippingInfo.customerName,
+            shippingPhone: draft.shippingInfo.phoneNumber,
+            shippingEmail: draft.shippingInfo.email,
+            shippingAddress: draft.shippingInfo.shippingAddress,
+            shippingCity: draft.shippingInfo.city,
+            shippingArea: draft.shippingInfo.area,
+            orderNotes: draft.shippingInfo.orderNotes,
+          },
+        ],
+        { session }
+      );
+      const orderId = order._id;
+      if (draft.coupon) await claimCoupon(draft.coupon, customer._id, orderId, session);
+
+      await OrderItem.insertMany(
+        draft.items.map((item) => ({ ...item, orderId })),
+        { session }
+      );
+
+      const stockNeeded = new Map<string, number>();
+      for (const item of draft.items) {
+        if (item.productId) {
+          if (item.isPreOrder) continue;
+          const key = String(item.productId);
+          stockNeeded.set(key, (stockNeeded.get(key) || 0) + item.quantity);
+        } else if (item.comboId) {
+          for (const member of item.comboItemsSnapshot) {
+            const key = String(member.productId);
+            stockNeeded.set(key, (stockNeeded.get(key) || 0) + member.quantity * item.quantity);
+          }
+        }
+      }
+      for (const [productId, quantity] of stockNeeded) {
+        await reserveStock(productId, quantity, session, { orderId: order._id, createdBy: customer._id });
+      }
+
+      for (const comboLine of draft.comboLines) {
+        const comboItem = draft.items.find((i) => i.comboId && String(i.comboId) === String(comboLine.comboId));
+        const revenueDelta = comboItem ? comboItem.subtotal : 0;
+        await Combo.updateOne(
+          { _id: comboLine.comboId },
+          { $inc: { soldCount: comboLine.quantity, revenue: revenueDelta } },
+          { session }
+        );
+      }
+    });
+  } finally {
+    await session.endSession();
+  }
+  if (!order) throw new AppError("Order could not be created", 500);
+  const created: OrderDocument = order;
+
+  const items = await OrderItem.find({ orderId: created._id }).lean();
+  notifyOrderPlaced(created, items);
+  await logActivity(req, {
+    action: "ORDER_CREATED",
+    targetOrderId: created._id,
+    newValue: { orderNumber: created.orderNumber, totalAmount: created.totalAmount, itemCount: items.length, guest: true },
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Order placed successfully",
+    data: {
+      ...toOrderResponse(created, items),
+      // Guest-friendly track reference so the UI can show it immediately.
+      tracking: {
+        orderNumber: created.orderNumber,
+        trackUrl: `/api/orders/track?orderNumber=${encodeURIComponent(created.orderNumber)}&phone=${encodeURIComponent(created.shippingPhone)}`,
+      },
+    },
+  });
+};
+
+// @desc    Public order tracking. No login — the caller supplies the order
+//          number and the phone number on file; both must match. Returns a
+//          narrower response than the authenticated route (no customer PII
+//          beyond what's already on the order).
+// @route   GET /api/orders/track?orderNumber=ORD-1023&phone=01712345678
+// @access  Public
+export const trackOrder = async (req: Request, res: Response) => {
+  const orderNumber = queryString(req.query.orderNumber);
+  const phone = queryString(req.query.phone);
+  if (!orderNumber || !orderNumber.trim()) throw new AppError("orderNumber is required", 400);
+  if (!phone || !phone.trim()) throw new AppError("phone is required", 400);
+  const normalizedPhone = normalizeBdPhone(phone);
+  if (!normalizedPhone) throw new AppError("phone must be a valid Bangladeshi phone number", 400);
+
+  const order = await Order.findOne({
+    orderNumber: orderNumber.trim().toUpperCase(),
+    shippingPhone: normalizedPhone,
+  }).lean();
+  if (!order) throw new AppError("Order not found. Check the order number and phone number.", 404);
+
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+
+  // Public view — mirror only the fields a customer needs to see.
+  res.status(200).json({
+    success: true,
+    message: "Order fetched successfully",
+    data: {
+      orderNumber: order.orderNumber,
+      orderStatus: order.orderStatus,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      fulfillmentMethod: order.fulfillmentMethod,
+      isPreOrder: order.isPreOrder ?? false,
+      expectedDeliveryDate: order.expectedDeliveryDate ?? null,
+      confirmedAt: order.confirmedAt ?? null,
+      deliveredAt: order.deliveredAt ?? null,
+      cancelledAt: order.cancelledAt ?? null,
+      cancellationReason: order.cancellationReason ?? null,
+      shippingInformation: {
+        name: order.shippingName,
+        phone: order.shippingPhone,
+        email: order.shippingEmail,
+        address: order.shippingAddress,
+        city: order.shippingCity,
+        area: order.shippingArea,
+      },
+      items: items.map((i) => ({
+        productTitle: i.productTitleSnapshot,
+        thumbnail: i.thumbnailSnapshot,
+        quantity: i.quantity,
+        selectedSize: i.selectedSize,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+      })),
+      subtotal: order.subtotal,
+      discount: order.discount,
+      shippingCost: order.shippingCost,
+      totalAmount: order.totalAmount,
+      createdAt: order.createdAt,
+    },
   });
 };

@@ -6,6 +6,7 @@ import CartItem, { type CartItemDocument, type ProductSnapshot, type ComboSnapsh
 import AppError from "./AppError";
 import { getVisibleCategoryIds } from "./categoryTree";
 import { getAvailability, getFinalPrice } from "./productView";
+import { availableOf } from "./inventory";
 import { PRE_ORDER } from "../config/orderOptions";
 import { isNonEmptyString, normalizeBdPhone } from "./validators";
 import {
@@ -125,7 +126,7 @@ const assertComboPurchasable = async (
     if (product.status !== "ACTIVE" || !visibleCategoryIds.has(String(product.categoryId))) {
       throw new AppError("A product in this combo is no longer available", 400);
     }
-    if (product.stock < item.quantity * quantity) {
+    if (availableOf(product) < item.quantity * quantity) {
       throw new AppError("Insufficient stock for a combo item", 400);
     }
   }
@@ -196,8 +197,9 @@ export const loadCart = async (customerId: Types.ObjectId): Promise<{ cart: Cart
         // Pre-order products are always buyable: the admin fulfils them after the delivery window,
         // so stock does not block the sale and stock is not decremented at order time.
         if (!product.isPreOrder) {
-          if (product.stock <= 0) issue = "Out of stock";
-          else if ((requested.get(String(product._id)) || 0) > product.stock) issue = "Insufficient product stock";
+          const available = availableOf(product);
+          if (available <= 0) issue = "Out of stock";
+          else if ((requested.get(String(product._id)) || 0) > available) issue = "Insufficient product stock";
         }
       } catch (error) {
         issue = (error as Error).message;
@@ -225,7 +227,7 @@ export const loadCart = async (customerId: Types.ObjectId): Promise<{ cart: Cart
         if (combo) {
           for (const memberLine of combo.items) {
             const memberProduct = memberById.get(String(memberLine.productId));
-            if (memberProduct && (requested.get(String(memberProduct._id)) || 0) > memberProduct.stock) {
+            if (memberProduct && (requested.get(String(memberProduct._id)) || 0) > availableOf(memberProduct)) {
               throw new AppError("Insufficient stock for a combo item", 400);
             }
           }
@@ -282,7 +284,7 @@ export const toCartResponse = (cart: CartDocument, lines: CartLine[]) => {
         comboId: null,
         productSnapshot: item.productSnapshot,
         comboSnapshot: null,
-        availability: product ? getAvailability(product.stock) : "OUT_OF_STOCK",
+        availability: product ? getAvailability(availableOf(product), product.isPreOrder) : "OUT_OF_STOCK",
       };
     }
     return {

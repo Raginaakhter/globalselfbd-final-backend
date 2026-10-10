@@ -10,8 +10,27 @@ export interface IProduct {
   categoryId: Types.ObjectId;
   // Real quantity; never sent to customers (they only see availability)
   stock: number;
-  // Purchase cost; only visible to users who can update products
+  // Quantity reserved by in-flight orders (not yet shipped). Decrements come from
+  // reservations rather than straight from `stock`, so simultaneous customers can
+  // never oversell. Available = max(0, stock - reserved).
+  reserved: number;
+  // Running totals: lifetime sold units + sold revenue (gross before shipping/COGS),
+  // units returned, and units marked as damaged/lost. All admin-adjustable via
+  // dedicated routes so audit history stays intact.
+  soldQuantity: number;
+  soldRevenue: number;
+  returnedQuantity: number;
+  damagedQuantity: number;
+  // Per-product low-stock threshold. When available stock crosses from above to
+  // at-or-below this value the admin gets ONE email (lastLowStockAlertAt handles
+  // dedup). 0 keeps the alert silent for products the admin doesn't want to track.
+  lowStockThreshold: number;
+  lastLowStockAlertAt: Date | null;
+  // Purchase cost; only visible to users who can update products. Treated as the
+  // *current* average purchase cost — FIFO lots carry per-lot cost separately.
   productCost: number;
+  // Stock-keeping unit. Optional (auto-generated on create when blank). Unique.
+  sku: string;
   customerSellPrice: number;
   customerSpecialPrice: number | null;
   isFabric: boolean;
@@ -28,6 +47,10 @@ export interface IProduct {
   // promises delivery in at least `preOrderMinDays` days (floor: PRE_ORDER.MIN_DELIVERY_DAYS).
   isPreOrder: boolean;
   preOrderMinDays: number;
+  // Set the first time stock reaches 0 after being positive; cleared when stock is
+  // replenished. Prevents the admin stock-out alert from firing more than once
+  // per out-of-stock cycle.
+  lastStockOutAlertAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,10 +91,35 @@ const productSchema = new Schema<IProduct>(
       min: [0, "Stock cannot be negative"],
       validate: { validator: Number.isInteger, message: "Stock must be a whole number" },
     },
+    reserved: {
+      type: Number,
+      default: 0,
+      min: [0, "Reserved cannot be negative"],
+      validate: { validator: Number.isInteger, message: "Reserved must be a whole number" },
+    },
+    soldQuantity: { type: Number, default: 0, min: 0 },
+    soldRevenue: { type: Number, default: 0, min: 0 },
+    returnedQuantity: { type: Number, default: 0, min: 0 },
+    damagedQuantity: { type: Number, default: 0, min: 0 },
+    lowStockThreshold: {
+      type: Number,
+      default: 0,
+      min: [0, "Low-stock threshold cannot be negative"],
+      validate: { validator: Number.isInteger, message: "Low-stock threshold must be a whole number" },
+    },
+    lastLowStockAlertAt: { type: Date, default: null },
     productCost: {
       type: Number,
       required: [true, "Product cost is required"],
       min: [0, "Product cost cannot be negative"],
+    },
+    sku: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+      maxlength: 60,
+      index: { unique: true, sparse: true, partialFilterExpression: { sku: { $type: "string", $ne: "" } } },
     },
     customerSellPrice: {
       type: Number,
@@ -119,6 +167,7 @@ const productSchema = new Schema<IProduct>(
     ratingAverage: { type: Number, default: 0, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0, min: 0 },
     isPreOrder: { type: Boolean, default: false, index: true },
+    lastStockOutAlertAt: { type: Date, default: null },
     preOrderMinDays: {
       type: Number,
       default: 0,

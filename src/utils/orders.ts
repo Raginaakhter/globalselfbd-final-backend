@@ -4,7 +4,7 @@ import OrderItem, { type IOrderItem } from "../models/OrderItem";
 import Combo from "../models/Combo";
 import AppError from "./AppError";
 import { releaseCoupon } from "./coupons";
-import { restoreStock } from "./inventory";
+import { releaseReservation } from "./inventory";
 import { CANCELLABLE_STATUSES, ORDER_STATUS } from "../config/orderOptions";
 
 export type OrderItemRecord = IOrderItem & { _id: Types.ObjectId };
@@ -177,7 +177,10 @@ export const cancelOrder = async (
         }
       }
       for (const [productId, quantity] of toRestore) {
-        await restoreStock(productId, quantity, session);
+        await releaseReservation(productId, quantity, session, {
+          orderId: order._id,
+          createdBy: options.cancelledBy ?? null,
+        });
       }
       // Roll back combo analytics
       const comboTotals = new Map<string, { quantity: number; revenue: number }>();

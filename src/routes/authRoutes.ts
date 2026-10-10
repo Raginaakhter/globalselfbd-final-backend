@@ -11,6 +11,8 @@ import {
   forgotPassword,
   verifyResetOtp,
   resetPassword,
+  requestLoginOtp,
+  verifyLoginOtp,
 } from "../controllers/authController";
 import { authenticate } from "../middleware/auth";
 
@@ -23,6 +25,13 @@ const authLimiter = rateLimit({
   message: { success: false, message: "Too many attempts, please try again after 15 minutes" },
 });
 
+// Passwordless customer flow (OTP via email; phone/SMS OTP is temporarily commented out)
+router.post("/request-otp", authLimiter, requestLoginOtp);
+router.post("/verify-otp", authLimiter, verifyLoginOtp);
+
+// Legacy password-based endpoints: kept for admin accounts (seeded with passwords).
+// Customers created through the OTP flow log in with email OTP.
+// Phone registration is commented out; email login is active.
 router.post("/register", authLimiter, register);
 router.post("/login", authLimiter, login);
 router.post("/refresh-token", refreshToken);

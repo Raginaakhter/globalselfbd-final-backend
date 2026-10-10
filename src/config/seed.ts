@@ -4,6 +4,7 @@ import Role from "../models/Role";
 import RolePermission from "../models/RolePermission";
 import User from "../models/User";
 import { PERMISSIONS, DEFAULT_ROLES, ROLES } from "./permissions";
+import { runInventoryBackfill } from "./inventoryBackfill";
 
 interface MongoWriteError {
   code?: number;
@@ -152,5 +153,6 @@ export const seedDatabase = async (): Promise<void> => {
   await seedRbac();
   await migrateLegacyUsers();
   await seedAdminUser();
+  await runInventoryBackfill();
   console.log("🌱 Roles & permissions are up to date");
 };

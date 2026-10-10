@@ -11,6 +11,8 @@ export interface IUser {
   phoneNumber: string;
   // Optional. Kept for historical orders and admin accounts; not required to register.
   email: string;
+  // Passwordless-by-default: customers now log in with OTP, so a user may have no
+  // password at all. Admin accounts seeded with a password still work.
   password: string;
   // Always set by the backend (never from client input)
   role: Types.ObjectId;
@@ -77,7 +79,7 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
     },
     password: {
       type: String,
-      required: [true, "Password is required"],
+      // Not required: passwordless OTP accounts never set one.
       minlength: [6, "Password must be at least 6 characters"],
       select: false, // Don't return password by default
     },
@@ -114,14 +116,16 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
 
 // Hash password before saving
 userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
+  if (!this.isModified("password") || !this.password) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   if (!this.isNew) this.passwordChangedAt = new Date();
 });
 
-// Compare entered password with hashed password
+// Compare entered password with hashed password. Passwordless accounts (OTP-only)
+// have no password, so any password login attempt against them must fail.
 userSchema.methods.matchPassword = async function (enteredPassword: string) {
+  if (!this.password) return false;
   return bcrypt.compare(enteredPassword, this.password);
 };
 

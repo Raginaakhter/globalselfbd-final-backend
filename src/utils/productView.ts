@@ -76,7 +76,13 @@ export const toProductResponse = (
     updatedAt: p.updatedAt,
   };
 
-  if (visibility.canSeeStock) data.stock = p.stock;
+  if (visibility.canSeeStock) {
+    data.stock = p.stock;
+    data.reserved = p.reserved ?? 0;
+    data.available = Math.max(0, (p.stock ?? 0) - (p.reserved ?? 0));
+    data.lowStockThreshold = p.lowStockThreshold ?? 0;
+    data.sku = p.sku ?? "";
+  }
   if (visibility.canSeeCost) data.productCost = p.productCost;
   return data;
 };

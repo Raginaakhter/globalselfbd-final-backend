@@ -101,3 +101,20 @@ export const sendPasswordResetOtpEmail = (user: { fullName: string; email: strin
     ),
     text: `Hi ${user.fullName},\n\nYour GlobalShelfBD password reset code is: ${otp}\n\nIt expires in ${minutes} minutes. Do not share it with anyone.\n\nIf you did not request this, ignore this email.`,
   });
+
+// Passwordless login/register OTP delivered by email.
+export const sendLoginOtpEmail = (to: string, otp: string, minutes: number) =>
+  sendEmail({
+    to,
+    subject: `${otp} is your GlobalShelfBD login code`,
+    html: emailLayout(
+      "Your login code",
+      `<p>Use this code to sign in to GlobalShelfBD:</p>
+       <p style="margin:24px 0;text-align:center">
+         <span style="display:inline-block;background:#f3f4f6;border-radius:8px;padding:16px 24px;font-size:32px;font-weight:bold;letter-spacing:8px;font-family:monospace;color:#111827">${otp}</span>
+       </p>
+       <p>This code expires in <strong>${minutes} minutes</strong>. Do not share it with anyone. GlobalShelfBD will never ask for this code.</p>
+       <p style="font-size:13px;color:#6b7280">If you did not request this, you can safely ignore this email.</p>`
+    ),
+    text: `Your GlobalShelfBD login code is: ${otp}\n\nIt expires in ${minutes} minutes. Do not share it with anyone.`,
+  });

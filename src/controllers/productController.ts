@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import type { Request, Response } from "express";
 import Product, { type IProduct, type ProductDocument } from "../models/Product";
+import { recordMovement } from "../utils/inventory";
 import Category from "../models/Category";
 import type { CategoryDocument } from "../models/Category";
 import OrderItem from "../models/OrderItem";
@@ -566,16 +567,53 @@ export const updateProductStock = async (req: Request, res: Response) => {
   }
 
   let product: ProductDocument | null;
+  let movementType: "MANUAL_STOCK_UPDATE" | "ADJUSTMENT_IN" | "ADJUSTMENT_OUT" = "MANUAL_STOCK_UPDATE";
+  let previousStock = 0;
+  let movementQuantity = 0;
   if (stock !== undefined) {
     const value = toNumber(stock, "Stock");
     if (!Number.isInteger(value) || value < 0) throw new AppError("Stock must be a whole number of 0 or more", 400);
-    product = await Product.findByIdAndUpdate(productId, { stock: value }, { returnDocument: "after" });
+    const before = await Product.findById(productId).select("stock reserved").lean();
+    if (!before) throw new AppError("Product not found", 404);
+    previousStock = before.stock;
+    movementQuantity = value - previousStock;
+    // Can't drop stock below the amount customers have already reserved: that
+    // would make the inventory oversell on the next DELIVERED transition.
+    if (value < (before.reserved || 0)) {
+      throw new AppError(
+        `Stock cannot be lower than reserved (${before.reserved}). Cancel the pending orders first or set a higher value.`,
+        400
+      );
+    }
+    // Clear the stock-out AND low-stock alert flags on any manual positive stock set,
+    // so a later zero/low can alert again. (Setting stock to 0 directly here does NOT
+    // trigger an alert — that path is reserved for sellouts; the admin saw the zero themselves.)
+    const update: Record<string, unknown> = { stock: value };
+    if (value > 0) {
+      update.lastStockOutAlertAt = null;
+      update.lastLowStockAlertAt = null;
+    }
+    product = await Product.findByIdAndUpdate(productId, update, { returnDocument: "after" });
   } else {
     const delta = toNumber(adjustBy, "adjustBy");
     if (!Number.isInteger(delta) || delta === 0) throw new AppError("adjustBy must be a non-zero whole number", 400);
+    movementType = delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT";
+    movementQuantity = delta;
+    const update: Record<string, unknown> = { $inc: { stock: delta } };
+    if (delta > 0) update.$set = { lastStockOutAlertAt: null, lastLowStockAlertAt: null };
+    const before = await Product.findById(productId).select("stock reserved").lean();
+    previousStock = before?.stock ?? 0;
+    // Negative adjustment must leave at least `reserved` units in stock, otherwise
+    // in-flight orders could oversell when they finalize.
+    if (delta < 0 && (previousStock + delta) < (before?.reserved || 0)) {
+      throw new AppError(
+        `Stock cannot be lower than reserved (${before?.reserved ?? 0}).`,
+        400
+      );
+    }
     product = await Product.findOneAndUpdate(
       { _id: productId, stock: { $gte: delta < 0 ? -delta : 0 } },
-      { $inc: { stock: delta } },
+      update,
       { returnDocument: "after" }
     );
     if (!product && (await Product.exists({ _id: productId }))) {
@@ -583,6 +621,22 @@ export const updateProductStock = async (req: Request, res: Response) => {
     }
   }
   if (!product) throw new AppError("Product not found", 404);
+
+  // Audit trail — every manual stock touch becomes a stock-movement row so the
+  // inventory movement report is consistent whether the admin used the product
+  // page or the inventory page.
+  if (movementQuantity !== 0) {
+    await recordMovement({
+      productId: product._id,
+      type: movementType,
+      quantity: movementQuantity,
+      previousStock,
+      newStock: product.stock,
+      reason: "Stock changed from product admin page",
+      createdBy: req.user?._id ?? null,
+    });
+  }
+
   const populated = await product.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
 
   res.status(200).json({

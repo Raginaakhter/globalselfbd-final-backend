@@ -185,6 +185,64 @@ export const updateShipping = async (req: Request, res: Response) => {
   res.status(200).json({ success: true, message: "Delivery charges updated successfully", data: shippingResponse(next) });
 };
 
+// ---------- Admin notification email ----------
+//
+// A single email address where the system sends internal alerts (stock-out, etc.).
+// Completely separate from customer authentication.
+
+const NOTIFICATIONS_KEY = "notifications";
+
+export interface NotificationSettings {
+  adminEmail: string;
+}
+
+const emptyNotifications = (): NotificationSettings => ({ adminEmail: "" });
+
+export const loadNotificationSettings = async (): Promise<NotificationSettings> => {
+  const doc = await SiteSetting.findOne({ key: NOTIFICATIONS_KEY }).lean();
+  const saved = (doc?.value || {}) as Partial<NotificationSettings>;
+  return { ...emptyNotifications(), ...saved };
+};
+
+// @desc    Fetch admin notification settings
+// @route   GET /api/settings/notifications
+// @access  settings.view
+export const getNotificationSettings = async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    message: "Notification settings fetched successfully",
+    data: await loadNotificationSettings(),
+  });
+};
+
+// @desc    Update admin notification settings (send only the fields to change; "" clears)
+// @route   PUT /api/settings/notifications
+// @access  settings.update
+export const updateNotificationSettings = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Body;
+  const { adminEmail } = body;
+  if (adminEmail === undefined) {
+    throw new AppError("Send at least one notification setting to update", 400);
+  }
+
+  const next = await loadNotificationSettings();
+  if (adminEmail === null || adminEmail === "") {
+    next.adminEmail = "";
+  } else {
+    if (typeof adminEmail !== "string" || !EMAIL_REGEX.test(adminEmail.trim())) {
+      throw new AppError("adminEmail must be a valid email", 400);
+    }
+    next.adminEmail = adminEmail.trim().toLowerCase();
+  }
+
+  await SiteSetting.findOneAndUpdate({ key: NOTIFICATIONS_KEY }, { $set: { value: next } }, { upsert: true });
+  res.status(200).json({
+    success: true,
+    message: "Notification settings updated successfully",
+    data: next,
+  });
+};
+
 // @desc    Delivery charges for cart/checkout pages; ?city=Sylhet&subtotal=1500 also returns the charge
 // @route   GET /api/public/shipping
 // @access  Public

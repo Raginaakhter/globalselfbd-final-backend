@@ -14,7 +14,8 @@ import { logActivity } from "../utils/activityLog";
 import { issueInvoiceQuietly } from "../utils/invoices";
 import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryString } from "../utils/validators";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
-import { notifyOrderEvent, notifyReviewRequest } from "../utils/orderEmails";
+import { finalizeSale, releaseReservation } from "../utils/inventory";
+import { notifyDeliveredAndReview } from "../utils/orderEmails";
 import {
   CANCELLABLE_STATUSES,
   ORDER_STATUS,
@@ -63,6 +64,65 @@ const paymentTimestamp = (
 // Dates from the admin panel are Bangladesh time (UTC+6)
 const TIMEZONE = "+06:00";
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+// Consume FIFO lots for every product line (and every combo member line) of an
+// order, drop stock + reserved, record SALE movements, and stamp stockRestoredAt
+// so a repeated SHIPPED-set (or a later deletion) never consumes stock twice.
+// Pre-order lines are skipped because they never reserved stock at creation.
+const finalizeOrderSale = async (order: OrderDocument): Promise<void> => {
+  const items = await OrderItem.find({ orderId: order._id }).lean();
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Re-check inside the transaction so two parallel admins can't double-finalize.
+      const claimed = await Order.findOneAndUpdate(
+        { _id: order._id, stockRestoredAt: null },
+        { $set: { stockRestoredAt: new Date() } },
+        { session, returnDocument: "after" }
+      );
+      if (!claimed) return;
+
+      // Aggregate per-product need and matching revenue (so FIFO COGS has something
+      // to compare against). Combo lines expand into their member products.
+      const needs = new Map<string, { quantity: number; revenue: number }>();
+      for (const item of items) {
+        if (item.productId) {
+          if (item.isPreOrder) continue;
+          const key = String(item.productId);
+          const existing = needs.get(key) || { quantity: 0, revenue: 0 };
+          existing.quantity += item.quantity;
+          existing.revenue += item.subtotal;
+          needs.set(key, existing);
+        } else if (item.comboId) {
+          // Allocate combo revenue to its member products by cost weight (each
+          // member gets its share of the combo line's total price proportional
+          // to member unit price × quantity).
+          const totalWeight = item.comboItemsSnapshot.reduce(
+            (sum, m) => sum + m.unitPrice * m.quantity * item.quantity,
+            0
+          );
+          for (const member of item.comboItemsSnapshot) {
+            const key = String(member.productId);
+            const existing = needs.get(key) || { quantity: 0, revenue: 0 };
+            const memberWeight = member.unitPrice * member.quantity * item.quantity;
+            const share = totalWeight > 0 ? (memberWeight / totalWeight) * item.subtotal : 0;
+            existing.quantity += member.quantity * item.quantity;
+            existing.revenue += Math.round(share * 100) / 100;
+            needs.set(key, existing);
+          }
+        }
+      }
+      for (const [productId, need] of needs) {
+        await finalizeSale(productId, need.quantity, need.revenue, session, {
+          orderId: order._id,
+          createdBy: null,
+        });
+      }
+    });
+  } finally {
+    await session.endSession();
+  }
+};
 
 const parseDate = (value: string, label: string, endOfDay: boolean): Date => {
   if (!DATE_REGEX.test(value)) throw new AppError(`${label} must be in YYYY-MM-DD format`, 400);
@@ -237,6 +297,13 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       { returnDocument: "after" }
     );
     if (!updated) throw new AppError("Order status was changed by someone else. Please reload", 409);
+
+    // Simplified flow: finalize the sale at DELIVERED. Consume FIFO lots,
+    // compute COGS, drop stock + reservation together. Idempotent via
+    // stockRestoredAt so a re-attempted DELIVERED set never consumes twice.
+    if (status === ORDER_STATUS.DELIVERED && !updated.stockRestoredAt) {
+      await finalizeOrderSale(updated);
+    }
   }
 
   // PENDING is never a valid target, so status here is always a real event
@@ -254,9 +321,12 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
   if (status === ORDER_STATUS.CONFIRMED) await issueInvoiceQuietly(updated);
 
   const items = await OrderItem.find({ orderId: order._id }).lean();
-  if (status !== ORDER_STATUS.PENDING) notifyOrderEvent(status, updated, items);
-  // Delivered: ask the customer to rate the products they bought
-  if (status === ORDER_STATUS.DELIVERED) notifyReviewRequest(updated, items);
+  // New flow: customers only ever receive TWO messages — the confirmation at
+  // placement (handled by orderController.createOrder) and the single
+  // delivered+review message here. Intermediate transitions do not notify.
+  if (status === ORDER_STATUS.DELIVERED) {
+    notifyDeliveredAndReview(updated, items);
+  }
   res.status(200).json({
     success: true,
     message: `Order status updated to ${status}`,
@@ -318,12 +388,45 @@ export const deleteOrder = async (req: Request, res: Response) => {
 
   const statusBefore = order.orderStatus;
   if (CANCELLABLE_STATUSES.includes(order.orderStatus)) {
-    order = await cancelOrder(order); // restores stock + releases coupon
+    order = await cancelOrder(order); // releases reservation + releases coupon
   }
   const statusNow = order.orderStatus;
   const wasFulfilled = statusNow === ORDER_STATUS.SHIPPED || statusNow === ORDER_STATUS.DELIVERED;
 
   const items = await OrderItem.find({ orderId: order._id }).lean();
+
+  // Defensive cleanup: a fulfilled order whose inventory wasn't settled (e.g.
+  // historical orders from before the SHIPPED-finalize path, or an admin
+  // deleting straight after SHIPPED without finalize) still holds reservations.
+  // Release them so Available doesn't stay inflated after the row is gone.
+  if (wasFulfilled && !order.stockRestoredAt) {
+    const toRelease = new Map<string, number>();
+    for (const item of items) {
+      if (item.productId) {
+        if (item.isPreOrder) continue;
+        const key = String(item.productId);
+        toRelease.set(key, (toRelease.get(key) || 0) + item.quantity);
+      } else if (item.comboId) {
+        for (const member of item.comboItemsSnapshot) {
+          const key = String(member.productId);
+          toRelease.set(key, (toRelease.get(key) || 0) + member.quantity * item.quantity);
+        }
+      }
+    }
+    const cleanupSession = await mongoose.startSession();
+    try {
+      await cleanupSession.withTransaction(async () => {
+        for (const [productId, quantity] of toRelease) {
+          await releaseReservation(productId, quantity, cleanupSession, {
+            orderId: order._id,
+            createdBy: getAuthUser(req)._id,
+          });
+        }
+      });
+    } finally {
+      await cleanupSession.endSession();
+    }
+  }
   const reviews = await Review.find({ orderId: order._id }).select("productId associatedProductIds").lean();
   const session = await mongoose.startSession();
   try {

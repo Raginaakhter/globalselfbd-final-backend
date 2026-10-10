@@ -1,11 +1,12 @@
 import type { Types } from "mongoose";
 import User from "../models/User";
-import Product from "../models/Product";
+import Order from "../models/Order";
 import type { IOrder } from "../models/Order";
 import type { IOrderItem } from "../models/OrderItem";
 import { CANCELLABLE_STATUSES, type OrderStatus, type PaymentMethod } from "../config/orderOptions";
 import { isEmailConfigured, sendEmail, escapeHtml, emailLayout } from "./sendEmail";
 import { siteUrl } from "./campaignEmail";
+import { notifyOrderPlacedSms, notifyDeliverySms, buildReviewUrl } from "./orderSms";
 
 export type OrderEmailEvent = "PLACED" | Exclude<OrderStatus, "PENDING">;
 type EmailOrder = { _id: Types.ObjectId | string } & Pick<
@@ -160,57 +161,133 @@ const getRecipient = async (order: EmailOrder): Promise<string | undefined> => {
   return user?.email || order.shippingEmail || undefined;
 };
 
-// Fire-and-forget: never delays or fails the API response
-export const notifyOrderEvent = (event: OrderEmailEvent, order: EmailOrder, items: EmailItem[]): void => {
-  if (!isEmailConfigured() || !EVENTS[event]) return;
+// Decide which channel the customer should receive notifications on. Rule:
+//   - Account has a registered email  -> email
+//   - Else account has a phone number -> SMS
+//   - Else fall back to whichever shipping contact exists.
+export type NotificationChannel = "email" | "sms" | "none";
+export const resolveChannel = async (order: EmailOrder): Promise<NotificationChannel> => {
+  const user = await User.findById(order.customerId).select("email phoneNumber").lean();
+  if (user?.email) return "email";
+  if (user?.phoneNumber) return "sms";
+  if (order.shippingEmail) return "email";
+  if (order.shippingPhone) return "sms";
+  return "none";
+};
+
+// Internal: raw send without dedup (used by routed helpers below).
+const sendOrderEventEmail = async (event: OrderEmailEvent, order: EmailOrder, items: EmailItem[]): Promise<boolean> => {
+  if (!isEmailConfigured() || !EVENTS[event]) return false;
+  const to = await getRecipient(order);
+  if (!to) return false;
+  try {
+    await sendEmail({ to, ...buildOrderEmail(event, order, items) });
+    return true;
+  } catch (error) {
+    console.error(`❌ Order email (${event}, ${order.orderNumber}) not sent:`, (error as Error).message);
+    return false;
+  }
+};
+
+// --------------------------------------------------------------------------
+// Order confirmation (ONE notification, channel chosen from the customer's
+// verified contact method). Sent right after a successful order placement.
+// Dedup is enforced through order.orderConfirmationSentAt (set by the SMS or
+// email path, whichever actually dispatches the message).
+// --------------------------------------------------------------------------
+export const notifyOrderPlaced = (order: EmailOrder, items: EmailItem[]): void => {
   setImmediate(async () => {
-    try {
-      const to = await getRecipient(order);
-      if (!to) return;
-      await sendEmail({ to, ...buildOrderEmail(event, order, items) });
-    } catch (error) {
-      console.error(`❌ Order email (${event}, ${order.orderNumber}) not sent:`, (error as Error).message);
+    const channel = await resolveChannel(order);
+    if (channel === "sms") {
+      // Phone-first customer: send the confirmation SMS. The SMS util owns the
+      // orderConfirmationSentAt dedup flag.
+      notifyOrderPlacedSms(order);
+      return;
+    }
+    if (channel !== "email") return;
+
+    // Claim the slot before sending so a race or a replay produces one email at most.
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, orderConfirmationSentAt: null },
+      { $set: { orderConfirmationSentAt: new Date() } },
+      { returnDocument: "after" }
+    ).select("_id");
+    if (!claimed) return;
+
+    const sent = await sendOrderEventEmail("PLACED", order, items);
+    if (!sent) {
+      await Order.updateOne({ _id: order._id }, { $set: { orderConfirmationSentAt: null } });
     }
   });
 };
 
-// After delivery: ask the customer to rate each product ("Rate & Review" opens the product's review section)
-export const notifyReviewRequest = (order: EmailOrder, items: ReviewItem[]): void => {
-  if (!isEmailConfigured() || items.length === 0) return;
+// --------------------------------------------------------------------------
+// Lifecycle emails are intentionally disabled in the simplified flow: the
+// customer only ever receives TWO messages — the confirmation at placement
+// (notifyOrderPlaced) and the delivery+review one at DELIVERED
+// (notifyDeliveredAndReview). This function is kept as a no-op so legacy
+// callers keep compiling.
+// --------------------------------------------------------------------------
+export const notifyOrderEvent = (_event: OrderEmailEvent, _order: EmailOrder, _items: EmailItem[]): void => {
+  // intentionally no-op
+};
+
+// --------------------------------------------------------------------------
+// Delivery + review combined notification (ONE message, channel-routed).
+// Phone-first customers already receive this as SMS via notifyDeliverySms;
+// email-first customers get the single email below, with the review link
+// baked in.
+// --------------------------------------------------------------------------
+export const notifyDeliveredAndReview = (order: EmailOrder, items: ReviewItem[]): void => {
   setImmediate(async () => {
+    const channel = await resolveChannel(order);
+    if (channel === "sms") {
+      notifyDeliverySms(order, items);
+      return;
+    }
+    if (channel !== "email") return;
+
+    const claimed = await Order.findOneAndUpdate(
+      { _id: order._id, deliveryEmailSentAt: null },
+      { $set: { deliveryEmailSentAt: new Date() } },
+      { returnDocument: "after" }
+    ).select("_id");
+    if (!claimed) return;
+
     try {
       const to = await getRecipient(order);
-      if (!to) return;
-      const slugs = new Map(
-        (await Product.find({ _id: { $in: items.map((i) => i.productId) } }).select("slug").lean()).map((p) => [String(p._id), p.slug])
-      );
-      const rows = items
-        .filter((i) => slugs.has(String(i.productId)))
-        .map((i) => {
-          const url = `${siteUrl()}/product/${encodeURIComponent(slugs.get(String(i.productId)) as string)}?review=${String(order._id)}#reviews`;
-          return `<tr><td style="padding:10px 0;border-bottom:1px solid #e5e7eb">
-            <table role="presentation" width="100%"><tr>
-              <td width="90" valign="top">${i.thumbnailSnapshot ? `<img src="${escapeHtml(i.thumbnailSnapshot)}" width="80" alt="${escapeHtml(i.productTitleSnapshot)}" style="border-radius:8px;border:1px solid #e5e7eb;display:block">` : ""}</td>
-              <td valign="top" style="padding-left:10px"><div style="font-weight:bold;margin-bottom:8px">${escapeHtml(i.productTitleSnapshot)}</div>${button(url, "Rate & Review", "#f59e0b")}</td>
-            </tr></table>
-          </td></tr>`;
-        });
-      if (!rows.length) return;
+      if (!to) {
+        await Order.updateOne({ _id: order._id }, { $set: { deliveryEmailSentAt: null } });
+        return;
+      }
+      const reviewUrl = await buildReviewUrl(order, items);
       const html = emailLayout(
-        "How was your order?",
+        "Your order has been delivered",
         `<p>Hi ${escapeHtml(order.shippingName)},</p>
-         <p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> has been delivered. Please tell other customers what you think of the products you bought.</p>
-         <table role="presentation" width="100%" style="border-collapse:collapse">${rows.join("")}</table>`
+         <p>Your order <strong>${escapeHtml(order.orderNumber)}</strong> has been delivered successfully. Thank you for shopping with us!</p>
+         <p>Please share your experience by leaving a review:</p>
+         <p style="margin:20px 0">${button(reviewUrl, "Leave a review", "#f59e0b")}</p>
+         <p style="font-size:13px;color:#6b7280">You can also paste this link into your browser: ${escapeHtml(reviewUrl)}</p>`
       );
-      const text = [
-        `Hi ${order.shippingName},`,
-        "",
-        `Your order ${order.orderNumber} has been delivered. Please rate the products you bought:`,
-        ...items.filter((i) => slugs.has(String(i.productId))).map((i) => `- ${i.productTitleSnapshot}: ${siteUrl()}/product/${slugs.get(String(i.productId))}?review=${String(order._id)}#reviews`),
-      ].join("\n");
-      await sendEmail({ to, subject: `Rate your products (${order.orderNumber})`, html, text });
+      const text = `Hi ${order.shippingName},
+
+Your order #${order.orderNumber} has been delivered successfully. Thank you for shopping with us! Please share your experience by leaving a review: ${reviewUrl}`;
+      await sendEmail({
+        to,
+        subject: `Your order ${order.orderNumber} has been delivered — leave a review`,
+        html,
+        text,
+      });
     } catch (error) {
-      console.error(`❌ Review request email (${order.orderNumber}) not sent:`, (error as Error).message);
+      console.error(`❌ Delivery+review email (${order.orderNumber}) not sent:`, (error as Error).message);
+      await Order.updateOne({ _id: order._id }, { $set: { deliveryEmailSentAt: null } }).catch(() => {});
     }
   });
+};
+
+// Legacy alias retained for callers that still reference `notifyReviewRequest`.
+// The spec removes the standalone review email: this now redirects to the
+// combined delivery+review helper so the single-notification rule stays intact.
+export const notifyReviewRequest = (order: EmailOrder, items: ReviewItem[]): void => {
+  notifyDeliveredAndReview(order, items);
 };

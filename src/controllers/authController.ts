@@ -14,8 +14,10 @@ import {
 } from "../utils/tokens";
 import { isNonEmptyString, normalizeBdPhone } from "../utils/validators";
 import { isValidImageUrl } from "../utils/imageValidation";
-import { isEmailConfigured, sendPasswordResetOtpEmail } from "../utils/sendEmail";
-import { isSmsConfigured, sendPasswordResetOtpSms } from "../utils/sendSms";
+import { isEmailConfigured, sendPasswordResetOtpEmail, sendLoginOtpEmail } from "../utils/sendEmail";
+// import { isSmsConfigured, sendPasswordResetOtpSms, sendLoginOtpSms } from "../utils/sendSms";
+import crypto from "crypto";
+import AuthOtp, { hashOtpWithSecret } from "../models/AuthOtp";
 import { getAuthUser } from "../middleware/auth";
 import { ROLES } from "../config/permissions";
 
@@ -57,11 +59,13 @@ const readPhoneInput = (body: Record<string, unknown>): string | undefined => {
   return normalized;
 };
 
+/*
 function assertPhoneNumber(value: string | undefined): asserts value is string {
   if (!value) {
     throw new AppError("Please provide a valid Bangladeshi phone number (e.g. 01712345678)", 400);
   }
 }
+*/
 
 // Read the refresh token from the cookie or the request body
 const getRefreshTokenFromRequest = (req: Request): string | null => {
@@ -69,11 +73,14 @@ const getRefreshTokenFromRequest = (req: Request): string | null => {
   return typeof token === "string" ? token : null;
 };
 
-// @desc    Register a new customer. Phone-number based: name + phone + password only.
-//          Email is NEVER required and is ignored even if the client sends it.
+// @desc    Register a new customer.
+//          Note: Phone-number based registration is temporarily commented out.
+//          Email registration is active via the passwordless OTP flow (request-otp -> verify-otp).
 // @route   POST /api/auth/register
 // @access  Public
 export const register = async (req: Request, res: Response) => {
+  /*
+  // Phone-number registration temporarily commented out
   const body = (req.body || {}) as Body;
   const { fullName, password, confirmPassword } = body;
 
@@ -102,10 +109,15 @@ export const register = async (req: Request, res: Response) => {
   const user = await created.populate<{ role: RoleDocument | null }>("role");
 
   await sendTokenResponse(user, 201, "User registered successfully", req, res);
+  */
+  throw new AppError(
+    "Phone registration is temporarily disabled. Please register using email OTP (/api/auth/request-otp).",
+    400
+  );
 };
 
-// @desc    Login. Customers log in with phoneNumber; admin accounts can still log in with email
-//          (so the existing admin flow keeps working — admins have no phone by default).
+// @desc    Login. Admin and existing accounts log in with email and password.
+//          (Phone number login is temporarily commented out)
 // @route   POST /api/auth/login
 // @access  Public
 export const login = async (req: Request, res: Response) => {
@@ -113,9 +125,11 @@ export const login = async (req: Request, res: Response) => {
   const { email, password } = body;
 
   if (typeof password !== "string" || !password) {
-    throw new AppError("Please provide your phone number (or email) and password", 400);
+    throw new AppError("Please provide your email and password", 400);
   }
 
+  /*
+  // Phone number login temporarily commented out:
   let user;
   const phoneRaw = body.phoneNumber ?? body.phone;
   if (phoneRaw !== undefined && phoneRaw !== null && phoneRaw !== "") {
@@ -131,6 +145,15 @@ export const login = async (req: Request, res: Response) => {
   } else {
     throw new AppError("Please provide your phone number and password", 400);
   }
+  */
+
+  if (!isNonEmptyString(email)) {
+    throw new AppError("Please provide your email and password", 400);
+  }
+
+  const user = await User.findOne({ email: email.toLowerCase() })
+    .select("+password")
+    .populate<{ role: RoleDocument | null }>("role");
 
   if (!user || !(await user.matchPassword(password))) {
     throw new AppError("Invalid credentials", 401);
@@ -316,16 +339,18 @@ function assertOtpFormat(otp: unknown): asserts otp is string {
   }
 }
 
-// Resolve an identifier (phoneNumber preferred, email supported for legacy admin accounts)
-// into a MongoDB filter, so the OTP flow accepts either without duplicating code.
-const resolveOtpIdentifier = (body: Body): { filter: Record<string, unknown>; label: "phone" | "email" } => {
+// Resolve an identifier (email only; phone number reset is temporarily commented out)
+const resolveOtpIdentifier = (body: Body): { filter: Record<string, unknown>; label: "email" } => {
+  /*
+  // Phone password reset OTP temporarily commented out:
   const phone = readPhoneInput(body);
   if (phone) return { filter: { phoneNumber: phone }, label: "phone" };
+  */
   if (isNonEmptyString(body.email)) {
     if (!EMAIL_REGEX.test(body.email)) throw new AppError("Please provide a valid email", 400);
     return { filter: { email: body.email.toLowerCase() }, label: "email" };
   }
-  throw new AppError("Please provide your phone number", 400);
+  throw new AppError("Please provide your email", 400);
 };
 
 // Check an OTP. Each check uses up one attempt atomically, so sending many
@@ -356,18 +381,15 @@ const checkResetOtp = async (filter: Record<string, unknown>, otp: string) => {
   return user;
 };
 
-// @desc    Send a 6-digit password reset OTP. Delivery channel follows the identifier:
-//          phoneNumber → SMS; email → email. Response is intentionally generic to prevent enumeration.
+// @desc    Send a 6-digit password reset OTP to email.
+//          (SMS/phone password reset is temporarily commented out)
 // @route   POST /api/auth/forgot-password
 // @access  Public
 export const forgotPassword = async (req: Request, res: Response) => {
   const isDev = process.env.NODE_ENV === "development";
   const body = (req.body || {}) as Body;
   const { filter, label } = resolveOtpIdentifier(body);
-  const genericMessage =
-    label === "phone"
-      ? "If an account exists with this phone number, an OTP has been sent"
-      : "If an account exists with this email, an OTP has been sent";
+  const genericMessage = "If an account exists with this email, an OTP has been sent";
 
   const user = await User.findOne(filter).select(OTP_FIELDS + " +phoneNumber +email +fullName");
 
@@ -376,10 +398,12 @@ export const forgotPassword = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, message: genericMessage, data: null });
   }
 
-  // Make sure the right delivery channel is available before issuing a code.
+  /*
+  // Phone/SMS delivery check commented out:
   if (label === "phone" && !isSmsConfigured() && !isDev) {
     throw new AppError("SMS service is not configured. Password reset by phone is unavailable", 503);
   }
+  */
   if (label === "email" && !isEmailConfigured() && !isDev) {
     throw new AppError("Password reset is not available yet", 503);
   }
@@ -400,6 +424,8 @@ export const forgotPassword = async (req: Request, res: Response) => {
   let delivered = false;
 
   try {
+    /*
+    // Phone/SMS delivery commented out:
     if (label === "phone") {
       if (isSmsConfigured()) {
         const result = await sendPasswordResetOtpSms(user, otp, minutes);
@@ -407,9 +433,15 @@ export const forgotPassword = async (req: Request, res: Response) => {
       } else if (isDev) {
         delivered = true; // dev console log acts as delivery
       }
-    } else if (isEmailConfigured()) {
-      await sendPasswordResetOtpEmail(user, otp, minutes);
-      delivered = true;
+    } else
+    */
+    if (label === "email") {
+      if (isEmailConfigured()) {
+        await sendPasswordResetOtpEmail(user, otp, minutes);
+        delivered = true;
+      } else if (isDev) {
+        delivered = true;
+      }
     }
   } catch (error) {
     // In production a failed send must not leave a usable code behind
@@ -422,7 +454,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
   }
 
   if (isDev) {
-    console.log(`🔑 Password reset OTP for ${label === "phone" ? user.phoneNumber : user.email}: ${otp}`);
+    console.log(`🔑 Password reset OTP for ${user.email}: ${otp}`);
   }
 
   return res.status(200).json({
@@ -455,7 +487,217 @@ export const verifyResetOtp = async (req: Request, res: Response) => {
   });
 };
 
-// @desc    Set a new password with the identifier (phoneNumber or email) + OTP
+/* --------------------------------------------------------------------------
+ * Passwordless login/register OTP flow (customer-facing via Email).
+ *
+ *   POST /api/auth/request-otp   { identifier: "<email>", fullName? }
+ *   POST /api/auth/verify-otp    { identifier: "<email>", otp, fullName? }
+ *
+ * Rules:
+ *   - Phone number login/register is temporarily commented out.
+ *   - 6-digit OTP, 5 minute lifetime, one-time use sent to email.
+ *   - Each new request invalidates the previous OTP (upsert by identifier).
+ *   - 60 second resend cooldown; max 5 verify attempts per OTP.
+ *   - OTP is NEVER returned in the API response (dev mode logs it to the server console).
+ * ------------------------------------------------------------------------ */
+
+const LOGIN_OTP_EXPIRE_MINUTES = 5;
+const LOGIN_OTP_RESEND_SECONDS = 60;
+const LOGIN_OTP_MAX_ATTEMPTS = 5;
+const LOGIN_OTP_INVALID = "OTP is invalid or has expired. Please request a new one";
+
+// Validate identifier as email (phone OTP is temporarily commented out).
+const classifyIdentifier = (
+  raw: unknown
+): { identifier: string; channel: "email" } => {
+  if (!isNonEmptyString(raw)) throw new AppError("Please provide your email", 400);
+  const trimmed = raw.trim();
+  if (trimmed.includes("@")) {
+    if (!EMAIL_REGEX.test(trimmed)) throw new AppError("Please provide a valid email", 400);
+    return { identifier: trimmed.toLowerCase(), channel: "email" };
+  }
+  /*
+  // Phone OTP temporarily commented out:
+  const phone = normalizeBdPhone(trimmed);
+  if (!phone) {
+    throw new AppError("Please provide a valid Bangladeshi phone number or email", 400);
+  }
+  return { identifier: phone, channel: "sms" };
+  */
+  throw new AppError("Phone number login/registration is temporarily disabled. Please provide a valid email", 400);
+};
+
+const generateOtp = (): string =>
+  String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+
+// Issue a login/register OTP for an email identifier.
+// Response is always generic: no success/failure signal beyond the cooldown.
+export const requestLoginOtp = async (req: Request, res: Response) => {
+  const isDev = process.env.NODE_ENV === "development";
+  const body = (req.body || {}) as Body;
+  const { identifier, channel } = classifyIdentifier(body.identifier);
+
+  /*
+  // SMS service check temporarily commented out:
+  if (channel === "sms" && !isSmsConfigured() && !isDev) {
+    throw new AppError("SMS service is not configured", 503);
+  }
+  */
+  if (channel === "email" && !isEmailConfigured() && !isDev) {
+    throw new AppError("Email service is not configured", 503);
+  }
+
+  // Resend cooldown: look at the existing record WITHOUT changing anything first.
+  const existing = await AuthOtp.findOne({ identifier }).select("sentAt");
+  if (existing) {
+    const secondsSince = (Date.now() - existing.sentAt.getTime()) / 1000;
+    if (secondsSince < LOGIN_OTP_RESEND_SECONDS) {
+      const wait = Math.ceil(LOGIN_OTP_RESEND_SECONDS - secondsSince);
+      throw new AppError(`Please wait ${wait} seconds before requesting a new OTP`, 429);
+    }
+  }
+
+  const otp = generateOtp();
+  const expiresAt = new Date(Date.now() + LOGIN_OTP_EXPIRE_MINUTES * 60 * 1000);
+
+  // Upsert: a new OTP wipes the previous code and attempt count.
+  await AuthOtp.findOneAndUpdate(
+    { identifier },
+    {
+      $set: {
+        identifier,
+        channel,
+        otpHash: hashOtpWithSecret(otp),
+        expiresAt,
+        attempts: 0,
+        sentAt: new Date(),
+      },
+    },
+    { upsert: true, returnDocument: "after" }
+  );
+
+  let delivered = false;
+  try {
+    /*
+    // SMS OTP delivery temporarily commented out:
+    if (channel === "sms") {
+      if (isSmsConfigured()) {
+        const result = await sendLoginOtpSms(identifier, otp, LOGIN_OTP_EXPIRE_MINUTES);
+        delivered = result.sent;
+      } else if (isDev) {
+        delivered = true;
+      }
+    } else
+    */
+    if (channel === "email") {
+      if (isEmailConfigured()) {
+        await sendLoginOtpEmail(identifier, otp, LOGIN_OTP_EXPIRE_MINUTES);
+        delivered = true;
+      } else if (isDev) {
+        delivered = true;
+      }
+    }
+  } catch (error) {
+    // Clear the staged OTP in production so a failed send doesn't leave a usable code.
+    if (!isDev) await AuthOtp.deleteOne({ identifier });
+    throw error;
+  }
+
+  if (isDev) console.log(`🔑 Login OTP for ${identifier}: ${otp}`);
+
+  res.status(200).json({
+    success: true,
+    message: "OTP sent to your email",
+    data: {
+      channel,
+      expiresInMinutes: LOGIN_OTP_EXPIRE_MINUTES,
+      resendAfterSeconds: LOGIN_OTP_RESEND_SECONDS,
+      ...(isDev ? { devOnly: { delivered, otp } } : {}),
+    },
+  });
+};
+
+// Verify an OTP. On success: register with email if the account doesn't exist, else log in.
+export const verifyLoginOtp = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Body;
+  const { identifier } = classifyIdentifier(body.identifier);
+  const { otp, fullName } = body;
+  assertOtpFormat(otp);
+
+  // Atomic claim: increments attempts and only matches a non-expired OTP under the cap.
+  const staged = await AuthOtp.findOneAndUpdate(
+    {
+      identifier,
+      expiresAt: { $gt: new Date() },
+      attempts: { $lt: LOGIN_OTP_MAX_ATTEMPTS },
+    },
+    { $inc: { attempts: 1 } },
+    { returnDocument: "after" }
+  ).select("+otpHash attempts channel");
+
+  if (!staged) throw new AppError(LOGIN_OTP_INVALID, 400);
+
+  const expected = Buffer.from(staged.otpHash);
+  const supplied = Buffer.from(hashOtpWithSecret(otp));
+  const match = expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
+
+  if (!match) {
+    const left = LOGIN_OTP_MAX_ATTEMPTS - staged.attempts;
+    if (left <= 0) {
+      await AuthOtp.deleteOne({ _id: staged._id });
+      throw new AppError("Too many wrong attempts. Please request a new OTP", 400);
+    }
+    throw new AppError(`Invalid OTP. ${left} attempt(s) left`, 400);
+  }
+
+  // OTP is one-time use: remove the staged doc immediately on success.
+  await AuthOtp.deleteOne({ _id: staged._id });
+
+  // Find or create the user via email.
+  // Phone registration is commented out; email registration with OTP is active:
+  const filter = { email: identifier };
+  /*
+  const filter = channel === "sms" ? { phoneNumber: identifier } : { email: identifier };
+  */
+  let user = await User.findOne(filter).populate<{ role: RoleDocument | null }>("role");
+
+  if (!user) {
+    const customerRole = await Role.findOne({ name: ROLES.CUSTOMER, status: "ACTIVE" });
+    if (!customerRole) throw new AppError("Registration is temporarily unavailable", 503);
+    const name =
+      typeof fullName === "string" && fullName.trim()
+        ? fullName.trim().slice(0, 100)
+        : identifier.split("@")[0].slice(0, 100);
+        /*
+        : channel === "sms"
+          ? "Customer"
+          : identifier.split("@")[0].slice(0, 100);
+        */
+    const created = await User.create({
+      fullName: name,
+      email: identifier,
+      /*
+      ...(channel === "sms" ? { phoneNumber: identifier } : { email: identifier }),
+      */
+      role: customerRole._id,
+    });
+    user = await created.populate<{ role: RoleDocument | null }>("role");
+  } else {
+    // Allow a one-time name correction if the account was created with the auto-generated name.
+    if (typeof fullName === "string" && fullName.trim() && (user.fullName === "Customer" || user.fullName === identifier.split("@")[0].slice(0, 100))) {
+      user.fullName = fullName.trim().slice(0, 100);
+      await user.save({ validateBeforeSave: false });
+    }
+  }
+
+  if (user.status !== "ACTIVE") {
+    throw new AppError("Your account is inactive. Please contact support", 403);
+  }
+
+  await sendTokenResponse(user, 200, "Login successful", req, res);
+};
+
+// @desc    Set a new password with the identifier (email) + OTP
 // @route   POST /api/auth/reset-password
 // @access  Public
 export const resetPassword = async (req: Request, res: Response) => {

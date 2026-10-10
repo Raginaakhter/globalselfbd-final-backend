@@ -11,7 +11,10 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   categories: ["view", "create", "update", "delete"],
   brands: ["view", "create", "update", "delete"],
   banners: ["view", "create", "update", "delete"],
-  inventory: ["view", "create", "update"],
+  inventory: ["view", "create", "update", "delete", "adjust"],
+  suppliers: ["view", "create", "update", "delete"],
+  shipments: ["view", "create", "update", "delete", "receive"],
+  stockRequests: ["view", "update", "delete"],
   // orders.view = own orders (customers); orders.viewAll = every customer's orders (admin panel)
   // orders.adminDiscount = may apply a manual discount at checkout (admin only; never granted to Customer)
   orders: ["view", "create", "update", "delete", "viewAll", "status", "paymentStatus", "adminDiscount"],
@@ -93,6 +96,9 @@ const DEFAULT_ROLES: DefaultRole[] = [
       "categories.*",
       "brands.*",
       "inventory.*",
+      "suppliers.*",
+      "shipments.*",
+      "stockRequests.*",
       "orders.view",
       "orders.viewAll",
       "orders.update",

@@ -3,6 +3,7 @@ import type { Types } from "mongoose";
 import Product, { type ProductDocument } from "../models/Product";
 import CartItem from "../models/CartItem";
 import Combo, { type ComboDocument } from "../models/Combo";
+import StockRequest from "../models/StockRequest";
 import AppError from "../utils/AppError";
 import { assertObjectId } from "../utils/validators";
 import { getVisibleCategoryIds } from "../utils/categoryTree";
@@ -18,6 +19,8 @@ import {
   toCartResponse,
 } from "../utils/checkout";
 import { isComboLive } from "../utils/combos";
+import { availableOf } from "../utils/inventory";
+import { notifyStockRequest } from "../utils/adminAlerts";
 import { getAuthUser } from "../middleware/auth";
 import { CART_LIMITS } from "../config/orderOptions";
 
@@ -42,8 +45,41 @@ const loadPurchasableProduct = async (productId: unknown): Promise<ProductDocume
   if (!product) throw new AppError("Product not found", 404);
   const visible = new Set((await getVisibleCategoryIds()).map(String));
   assertPurchasable(product, visible);
-  if (product.stock <= 0) throw new AppError("Product is out of stock", 400);
+  // Pre-order products are always purchasable even with zero availability;
+  // the admin fulfils them after the delivery window.
+  if (!product.isPreOrder && availableOf(product) <= 0) {
+    throw new AppError("Product is out of stock", 400);
+  }
   return product;
+};
+
+// Create a StockRequest row and queue the admin alert. Called whenever a
+// customer tries to add/update a quantity greater than available stock.
+// Request rows feed the admin "Stock Requests" dashboard regardless of whether
+// the email actually goes out (rate-limiting happens on the notification side).
+const recordStockRequest = async (
+  req: Request,
+  product: ProductDocument,
+  requestedQuantity: number,
+  availableQuantity: number
+): Promise<void> => {
+  const shortage = Math.max(0, requestedQuantity - availableQuantity);
+  if (shortage <= 0) return;
+  const authUser = req.user ?? null;
+  const request = await StockRequest.create({
+    productId: product._id,
+    customerId: authUser?._id ?? null,
+    customerName: authUser?.fullName || "",
+    customerPhone: authUser?.phoneNumber || "",
+    customerEmail: authUser?.email || "",
+    productTitleSnapshot: product.productTitle,
+    skuSnapshot: product.sku || "",
+    requestedQuantity,
+    availableQuantity,
+    shortageQuantity: shortage,
+    status: "NEW",
+  });
+  notifyStockRequest(request._id);
 };
 
 const loadPurchasableCombo = async (
@@ -63,7 +99,7 @@ const loadPurchasableCombo = async (
     if (product.status !== "ACTIVE" || !visible.has(String(product.categoryId))) {
       throw new AppError("A product in this combo is no longer available", 400);
     }
-    if (product.stock < item.quantity) {
+    if (availableOf(product) < item.quantity) {
       throw new AppError("Insufficient stock for a combo item", 400);
     }
   }
@@ -71,13 +107,19 @@ const loadPurchasableCombo = async (
 };
 
 // Total quantity of this product in the cart (across product lines and combo member usage)
-// must fit in stock. Customers only see "Insufficient product stock", never the number.
+// must fit in AVAILABLE stock (stock - reserved). Customers see "Insufficient product
+// stock" — never the raw number — and a StockRequest row is recorded so the admin can
+// see unmet demand.
 const assertStockFor = async (
+  req: Request,
   cartId: Types.ObjectId,
   product: ProductDocument,
   newQuantity: number,
   excludeItemId?: Types.ObjectId
 ): Promise<void> => {
+  // Pre-order products ignore stock gating entirely.
+  if (product.isPreOrder) return;
+
   const filter: Record<string, unknown> = { cartId, productId: product._id };
   if (excludeItemId) filter._id = { $ne: excludeItemId };
   const others = await CartItem.find(filter).select("quantity");
@@ -97,12 +139,22 @@ const assertStockFor = async (
       }
     }
   }
+  const available = availableOf(product);
   const total = others.reduce((sum, i) => sum + i.quantity, 0) + newQuantity + comboConsumption;
-  if (total > product.stock) throw new AppError("Insufficient product stock", 400);
+  if (total > available) {
+    // Fire-and-forget: log the shortage so the admin can see unmet demand.
+    // Rate-limit happens inside notifyStockRequest; we always create the row.
+    await recordStockRequest(req, product, total, available);
+    throw new AppError(
+      `Only ${available} unit${available === 1 ? "" : "s"} available for "${product.productTitle}"`,
+      400
+    );
+  }
 };
 
 // For combo adds: validate that all member products have stock given the full cart
 const assertComboStockFor = async (
+  req: Request,
   cartId: Types.ObjectId,
   combo: ComboDocument,
   newQuantity: number,
@@ -114,7 +166,7 @@ const assertComboStockFor = async (
   for (const member of combo.items) {
     const product = byId.get(String(member.productId));
     if (!product) throw new AppError("A product in this combo is no longer available", 400);
-    await assertStockFor(cartId, product, member.quantity * newQuantity, excludeItemId);
+    await assertStockFor(req, cartId, product, member.quantity * newQuantity, excludeItemId);
   }
 };
 
@@ -159,7 +211,7 @@ export const addToCart = async (req: Request, res: Response) => {
     if (!existing && (await CartItem.countDocuments({ cartId: cart._id })) >= CART_LIMITS.MAX_ITEMS) {
       throw new AppError(`Your cart can hold at most ${CART_LIMITS.MAX_ITEMS} different items`, 400);
     }
-    await assertComboStockFor(cart._id, combo, newQuantity, existing?._id);
+    await assertComboStockFor(req, cart._id, combo, newQuantity, existing?._id);
 
     const unitPrice = combo.comboPrice;
     const fields = {
@@ -204,7 +256,7 @@ export const addToCart = async (req: Request, res: Response) => {
   if (!existing && (await CartItem.countDocuments({ cartId: cart._id })) >= CART_LIMITS.MAX_ITEMS) {
     throw new AppError(`Your cart can hold at most ${CART_LIMITS.MAX_ITEMS} different items`, 400);
   }
-  await assertStockFor(cart._id, product, newQuantity, existing?._id);
+  await assertStockFor(req, cart._id, product, newQuantity, existing?._id);
 
   const unitPrice = getFinalPrice(product);
   const fields = {
@@ -246,7 +298,7 @@ export const updateCartItem = async (req: Request, res: Response) => {
     const qty = parseQuantity(quantity);
     const combo = await Combo.findById(item.comboId);
     if (!combo || !isComboLive(combo)) throw new AppError("Combo is not available", 400);
-    await assertComboStockFor(cart._id, combo, qty, item._id);
+    await assertComboStockFor(req, cart._id, combo, qty, item._id);
 
     const members = await Product.find({ _id: { $in: combo.items.map((i) => i.productId) } });
     const byId = new Map(members.map((p) => [String(p._id), p]));
@@ -277,7 +329,7 @@ export const updateCartItem = async (req: Request, res: Response) => {
     });
     if (clash) throw new AppError("This product with the selected size is already in your cart", 409);
   }
-  await assertStockFor(cart._id, product, qty, item._id);
+  await assertStockFor(req, cart._id, product, qty, item._id);
 
   const unitPrice = getFinalPrice(product);
   item.set({
@@ -308,4 +360,46 @@ export const clearCart = async (req: Request, res: Response) => {
   const cart = await getOrCreateCart(getAuthUser(req)._id);
   await CartItem.deleteMany({ cartId: cart._id });
   await sendCart(req, res, 200, "Cart cleared");
+};
+
+// @desc    Re-check every item in my cart against current stock. Returns an
+//          `ok` flag and a list of lines that would fail. Does not mutate the cart.
+// @route   POST /api/cart/validate-stock
+// @access  cart.manage
+export const validateCartStock = async (req: Request, res: Response) => {
+  const { cart, lines } = await loadCart(getAuthUser(req)._id);
+  const issues: {
+    cartItemId: Types.ObjectId;
+    type: "product" | "combo" | "invalid";
+    productId: Types.ObjectId | null;
+    comboId: Types.ObjectId | null;
+    productTitle: string;
+    requested: number;
+    available: number | null;
+    issue: string;
+  }[] = [];
+  for (const line of lines) {
+    if (!line.issue) continue;
+    const title =
+      line.product?.productTitle ||
+      line.combo?.comboTitle ||
+      line.item.productSnapshot?.productTitle ||
+      line.item.comboSnapshot?.comboTitle ||
+      "Item";
+    issues.push({
+      cartItemId: line.item._id,
+      type: line.product ? "product" : line.combo ? "combo" : "invalid",
+      productId: line.item.productId,
+      comboId: line.item.comboId,
+      productTitle: title,
+      requested: line.item.quantity,
+      available: line.product ? availableOf(line.product) : null,
+      issue: line.issue,
+    });
+  }
+  res.status(200).json({
+    success: true,
+    message: issues.length === 0 ? "All cart items are in stock" : "Some cart items are out of stock",
+    data: { cartId: cart._id, ok: issues.length === 0, issues },
+  });
 };

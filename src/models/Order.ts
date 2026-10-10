@@ -60,6 +60,13 @@ export interface IOrder {
   refundAmount: number;
   // Set once when stock is returned, so a cancel can never restore stock twice
   stockRestoredAt: Date | null;
+  // Set once when the delivery+review SMS has been dispatched, so refreshing
+  // or re-sending the DELIVERED update can never produce a second SMS.
+  deliverySmsSentAt: Date | null;
+  // Email counterparts: duplicate-prevention for the single delivery+review email
+  // and the one-shot order confirmation email.
+  deliveryEmailSentAt: Date | null;
+  orderConfirmationSentAt: Date | null;
   // Pre-order snapshot. isPreOrder is true when ANY line in the order is a pre-order product
   // at checkout time; preOrderMinDays is the longest of those products' promised windows,
   // snapshotted so later product edits do not retroactively change this order's promise.
@@ -100,7 +107,7 @@ const orderSchema = new Schema<IOrder>(
     totalAmount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
     paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: PAYMENT_STATUS.PENDING, index: true },
-    orderStatus: { type: String, enum: ORDER_STATUSES, default: ORDER_STATUS.PENDING, index: true },
+    orderStatus: { type: String, enum: ORDER_STATUSES, default: ORDER_STATUS.CONFIRMED, index: true },
     shippingName: { type: String, required: true, trim: true },
     shippingPhone: { type: String, required: true, trim: true },
     shippingEmail: { type: String, trim: true, lowercase: true, default: null },
@@ -120,6 +127,9 @@ const orderSchema = new Schema<IOrder>(
     refundedAt: { type: Date, default: null },
     refundAmount: { type: Number, default: 0, min: 0 },
     stockRestoredAt: { type: Date, default: null },
+    deliverySmsSentAt: { type: Date, default: null },
+    deliveryEmailSentAt: { type: Date, default: null },
+    orderConfirmationSentAt: { type: Date, default: null },
     isPreOrder: { type: Boolean, default: false, index: true },
     preOrderMinDays: { type: Number, default: 0, min: 0 },
     expectedDeliveryDate: { type: Date, default: null, index: true },

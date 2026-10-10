@@ -1,10 +1,15 @@
 // Order, payment, shipping and cart rules. Change business rules here.
 
+// Customer-facing order lifecycle is simple: an order is CONFIRMED when it is
+// placed, and DELIVERED once the courier marks it handed over. CANCELLED is kept
+// as an internal state for refunds and admin cleanup. The old intermediate
+// statuses (PROCESSING, READY_TO_SHIP, SHIPPED, OUT_FOR_DELIVERY) are retained
+// in the enum for backward compatibility with historical orders already stored
+// in the database — the active flow never routes through them.
 export const ORDER_STATUS = {
   PENDING: "PENDING",
   CONFIRMED: "CONFIRMED",
   PROCESSING: "PROCESSING",
-  // Intermediate fulfilment steps; mainly used by pre-orders but any order may transition through them.
   READY_TO_SHIP: "READY_TO_SHIP",
   SHIPPED: "SHIPPED",
   OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
@@ -14,25 +19,36 @@ export const ORDER_STATUS = {
 export type OrderStatus = (typeof ORDER_STATUS)[keyof typeof ORDER_STATUS];
 export const ORDER_STATUSES = Object.values(ORDER_STATUS);
 
-// Allowed next statuses for each status. READY_TO_SHIP and OUT_FOR_DELIVERY are optional
-// intermediate stops; the simpler PROCESSING→SHIPPED and SHIPPED→DELIVERED paths still work.
+// New simplified transitions: CONFIRMED → DELIVERED (or CANCELLED).
+// Historical rows that are still PENDING / PROCESSING / READY_TO_SHIP /
+// SHIPPED / OUT_FOR_DELIVERY are kept movable so admins can still finalise them.
 export const ORDER_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   PENDING: ["CONFIRMED", "CANCELLED"],
-  CONFIRMED: ["PROCESSING", "CANCELLED"],
-  PROCESSING: ["READY_TO_SHIP", "SHIPPED", "CANCELLED"],
-  READY_TO_SHIP: ["SHIPPED", "CANCELLED"],
-  SHIPPED: ["OUT_FOR_DELIVERY", "DELIVERED"],
+  CONFIRMED: ["DELIVERED", "CANCELLED"],
+  PROCESSING: ["DELIVERED", "CANCELLED"],
+  READY_TO_SHIP: ["DELIVERED", "CANCELLED"],
+  SHIPPED: ["DELIVERED"],
   OUT_FOR_DELIVERY: ["DELIVERED"],
   DELIVERED: [],
   CANCELLED: [],
 };
 
-// Statuses from which an order can be cancelled (stock is restored)
+// Statuses from which an order can be cancelled (reservation is released).
+// Simplified flow: anything that hasn't shipped out yet can still be cancelled.
 export const CANCELLABLE_STATUSES: readonly OrderStatus[] = [
   "PENDING",
   "CONFIRMED",
   "PROCESSING",
   "READY_TO_SHIP",
+];
+
+// Statuses the customer-facing UI should ever surface. Admin dashboards show
+// the full list for historical rows, but customers only ever see these two
+// (plus CANCELLED when the order was cancelled).
+export const CUSTOMER_VISIBLE_STATUSES: readonly OrderStatus[] = [
+  "CONFIRMED",
+  "DELIVERED",
+  "CANCELLED",
 ];
 
 export const PAYMENT_STATUS = {
