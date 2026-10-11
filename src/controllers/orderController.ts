@@ -17,7 +17,10 @@ import {
 } from "../utils/checkout";
 import { reserveStock } from "../utils/inventory";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
-import { notifyOrderPlaced } from "../utils/orderEmails";
+// notifyOrderPlaced is deliberately NOT called at order-create time anymore;
+// the admin fires it by moving the order from PENDING → CONFIRMED, so the
+// import lives in adminOrderController. If a future flow needs auto-confirm
+// on creation, re-import here and send after the transaction.
 import { getAuthUser, loadPermissions } from "../middleware/auth";
 import { claimCoupon, normalizeCouponCode } from "../utils/coupons";
 import { buildGuestOrderDraft, findOrCreateGuestCustomer } from "../utils/guestCheckout";
@@ -183,10 +186,12 @@ export const createOrder = async (req: Request, res: Response) => {
           {
             orderNumber: `${ORDER_NUMBER_PREFIX}${seq}`,
             customerId: customer._id,
-            // New flow: orders are CONFIRMED on placement (no manual admin
-            // approval step), so timestamp the confirmation here as well.
-            orderStatus: "CONFIRMED" as const,
-            confirmedAt: new Date(),
+            // Orders are placed as PENDING. An admin must explicitly confirm
+            // the order from the admin dashboard, which fires the "order
+            // confirmed" email. The default on the schema handles PENDING,
+            // but we spell it out here so a reader sees the intent at the
+            // call-site.
+            orderStatus: "PENDING" as const,
             subtotal: draft.subtotal,
             discount: draft.discount,
             couponId: draft.coupon?.coupon._id ?? null,
@@ -260,8 +265,10 @@ export const createOrder = async (req: Request, res: Response) => {
   const created: OrderDocument = order;
 
   const items = await OrderItem.find({ orderId: created._id }).lean();
-  // Channel-routed order confirmation: SMS for phone-first accounts, email for email-first.
-  notifyOrderPlaced(created, items);
+  // Confirmation email is deliberately held until the admin flips the order
+  // to CONFIRMED. New orders start PENDING and the customer is told so on the
+  // frontend. The notification helpers remain idempotent — one email per order
+  // guaranteed by orderConfirmationSentAt on first dispatch.
   await logActivity(req, {
     action: "ORDER_CREATED",
     targetOrderId: created._id,
@@ -389,8 +396,7 @@ export const createGuestOrder = async (req: Request, res: Response) => {
           {
             orderNumber: `${ORDER_NUMBER_PREFIX}${seq}`,
             customerId: customer._id,
-            orderStatus: ORDER_STATUS.CONFIRMED,
-            confirmedAt: new Date(),
+            orderStatus: ORDER_STATUS.PENDING,
             subtotal: draft.subtotal,
             discount: draft.discount,
             couponId: draft.coupon?.coupon._id ?? null,
@@ -458,7 +464,8 @@ export const createGuestOrder = async (req: Request, res: Response) => {
   const created: OrderDocument = order;
 
   const items = await OrderItem.find({ orderId: created._id }).lean();
-  notifyOrderPlaced(created, items);
+  // Guest orders also wait for admin CONFIRMED before the confirmation
+  // message fires — same rule as logged-in checkout.
   await logActivity(req, {
     action: "ORDER_CREATED",
     targetOrderId: created._id,

@@ -48,6 +48,10 @@ export interface IOrder {
   // Why this order was cancelled, who cancelled it (admin audit trail)
   cancellationReason: string | null;
   cancelledBy: Types.ObjectId | null;
+  // Delivery method the admin assigned to this order. Defaults to MANUAL for
+  // every existing order (safe migration) — admins must explicitly switch an
+  // eligible order to STEADFAST and then book it from the courier dashboard.
+  deliveryMethod: "MANUAL" | "STEADFAST";
   // When each step happened (used by the sales and payment reports)
   confirmedAt: Date | null;
   readyToShipAt: Date | null;
@@ -107,7 +111,7 @@ const orderSchema = new Schema<IOrder>(
     totalAmount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String, enum: PAYMENT_METHODS, required: true },
     paymentStatus: { type: String, enum: PAYMENT_STATUSES, default: PAYMENT_STATUS.PENDING, index: true },
-    orderStatus: { type: String, enum: ORDER_STATUSES, default: ORDER_STATUS.CONFIRMED, index: true },
+    orderStatus: { type: String, enum: ORDER_STATUSES, default: ORDER_STATUS.PENDING, index: true },
     shippingName: { type: String, required: true, trim: true },
     shippingPhone: { type: String, required: true, trim: true },
     shippingEmail: { type: String, trim: true, lowercase: true, default: null },
@@ -118,6 +122,12 @@ const orderSchema = new Schema<IOrder>(
     cancelledAt: { type: Date, default: null },
     cancellationReason: { type: String, default: null, trim: true, maxlength: 500 },
     cancelledBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    deliveryMethod: {
+      type: String,
+      enum: { values: ["MANUAL", "STEADFAST"], message: "deliveryMethod must be MANUAL or STEADFAST" },
+      default: "MANUAL",
+      index: true,
+    },
     confirmedAt: { type: Date, default: null },
     readyToShipAt: { type: Date, default: null },
     shippedAt: { type: Date, default: null },

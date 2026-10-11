@@ -18,6 +18,19 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   // orders.view = own orders (customers); orders.viewAll = every customer's orders (admin panel)
   // orders.adminDiscount = may apply a manual discount at checkout (admin only; never granted to Customer)
   orders: ["view", "create", "update", "delete", "viewAll", "status", "paymentStatus", "adminDiscount"],
+  // Courier (Steadfast) integration — each action is a separate permission so sensitive
+  // operations (settlement edits, actual-fee entry) can be granted independently.
+  courier: [
+    "view",
+    "book",
+    "sync",
+    "cancel",
+    "returnRequest",
+    "returnReceive",
+    "settlement",
+    "actualFee",
+    "settings",
+  ],
   cart: ["manage"],
   payments: ["view", "update"],
   invoices: ["view", "create"],
@@ -105,6 +118,12 @@ const DEFAULT_ROLES: DefaultRole[] = [
       "customers.view",
       "sales.view",
       "reports.view",
+      "courier.view",
+      "courier.book",
+      "courier.sync",
+      "courier.cancel",
+      "courier.returnRequest",
+      "courier.returnReceive",
     ]),
   },
   {

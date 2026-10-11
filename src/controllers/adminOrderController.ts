@@ -15,7 +15,7 @@ import { issueInvoiceQuietly } from "../utils/invoices";
 import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryString } from "../utils/validators";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { finalizeSale, releaseReservation } from "../utils/inventory";
-import { notifyDeliveredAndReview } from "../utils/orderEmails";
+import { notifyOrderPlaced, notifyDeliveredAndReview } from "../utils/orderEmails";
 import {
   CANCELLABLE_STATUSES,
   ORDER_STATUS,
@@ -321,9 +321,14 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
   if (status === ORDER_STATUS.CONFIRMED) await issueInvoiceQuietly(updated);
 
   const items = await OrderItem.find({ orderId: order._id }).lean();
-  // New flow: customers only ever receive TWO messages — the confirmation at
-  // placement (handled by orderController.createOrder) and the single
-  // delivered+review message here. Intermediate transitions do not notify.
+  // Customers receive exactly TWO messages across the lifecycle:
+  //   1. "Order confirmed" when the admin flips PENDING → CONFIRMED here
+  //   2. "Delivered + review" when the admin flips → DELIVERED
+  // Both helpers are idempotent (orderConfirmationSentAt / deliveryEmailSentAt
+  // flags on the Order), so a re-confirm or re-deliver sends nothing extra.
+  if (status === ORDER_STATUS.CONFIRMED) {
+    notifyOrderPlaced(updated, items);
+  }
   if (status === ORDER_STATUS.DELIVERED) {
     notifyDeliveredAndReview(updated, items);
   }

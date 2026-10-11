@@ -20,6 +20,7 @@ const DASHBOARD_MENU: MenuItem[] = [
   { key: "shipments", label: "Shipments", path: "/admin-dashboard/shipments", permission: "shipments.view" },
   { key: "stockRequests", label: "Stock Requests", path: "/admin-dashboard/stock-requests", permission: "stockRequests.view" },
   { key: "orders", label: "Orders", path: "/admin-dashboard/orders", permission: "orders.viewAll" },
+  { key: "courier", label: "Steadfast Courier", path: "/admin-dashboard/courier", permission: "courier.view" },
   { key: "payments", label: "Payments", path: "/admin-dashboard/payments", permission: "payments.view" },
   { key: "invoices", label: "Invoices", path: "/admin-dashboard/invoices", permission: "invoices.view" },
   { key: "users", label: "Users", path: "/admin-dashboard/users", permission: "users.view" },
