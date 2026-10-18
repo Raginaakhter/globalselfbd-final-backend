@@ -13,6 +13,7 @@ import {
   recordMovement,
   returnToStock,
   returnDamaged,
+  syncAutoPreOrderState,
 } from "../utils/inventory";
 import { notifyLowStock, notifyStockOut, notifyStockRequest } from "../utils/adminAlerts";
 import { assertObjectId, escapeRegex, getPagination, queryString } from "../utils/validators";
@@ -182,6 +183,15 @@ export const getInventorySummary = async (req: Request, res: Response) => {
             $cond: [{ $lte: [{ $subtract: ["$stock", { $ifNull: ["$reserved", 0] }] }, 0] }, 1, 0],
           },
         },
+        // Products the system auto-switched to pre-order because they ran out
+        // of stock. Admin-set (MANUAL) pre-orders are counted separately so the
+        // dashboard tile reflects what the auto-switch actually did.
+        autoPreOrder: {
+          $sum: { $cond: [{ $eq: ["$preOrderSource", "AUTO"] }, 1, 0] },
+        },
+        manualPreOrder: {
+          $sum: { $cond: [{ $eq: ["$preOrderSource", "MANUAL"] }, 1, 0] },
+        },
       },
     },
   ]);
@@ -198,6 +208,8 @@ export const getInventorySummary = async (req: Request, res: Response) => {
     inventoryValue: 0,
     lowStock: 0,
     outOfStock: 0,
+    autoPreOrder: 0,
+    manualPreOrder: 0,
   };
 
   const cogsAgg = await InventoryLot.aggregate([
@@ -235,6 +247,8 @@ export const getInventorySummary = async (req: Request, res: Response) => {
       availableStock,
       lowStockCount: summary.lowStock || 0,
       outOfStockCount: summary.outOfStock || 0,
+      autoPreOrderCount: summary.autoPreOrder || 0,
+      manualPreOrderCount: summary.manualPreOrder || 0,
       damagedQuantity: summary.totalDamaged || 0,
       returnedQuantity: summary.totalReturned || 0,
       inventoryCost: roundMoney(summary.inventoryCost || 0),
@@ -263,6 +277,8 @@ export const listInventory = async (req: Request, res: Response) => {
   const category = queryString(req.query.category);
   const stockStatus = queryString(req.query.stockStatus);
   const includeSubcategories = queryString(req.query.includeSubcategories);
+  const preOrder = queryString(req.query.preOrder);
+  const preOrderSource = queryString(req.query.preOrderSource);
   const sort = queryString(req.query.sort) || "newest";
 
   const filter: Record<string, unknown> = {};
@@ -304,6 +320,20 @@ export const listInventory = async (req: Request, res: Response) => {
       });
     }
   }
+  // Pre-order filters so the dashboard can show stock-out → auto-pre-order products.
+  if (preOrder === "true") and.push({ isPreOrder: true });
+  else if (preOrder === "false") and.push({ isPreOrder: false });
+  if (preOrderSource) {
+    if (!["AUTO", "MANUAL", "NONE"].includes(preOrderSource)) {
+      throw new AppError("preOrderSource must be AUTO, MANUAL or NONE", 400);
+    }
+    and.push(
+      preOrderSource === "NONE"
+        ? { $or: [{ preOrderSource: null }, { preOrderSource: { $exists: false } }] }
+        : { preOrderSource }
+    );
+  }
+
   if (and.length) filter.$and = and;
 
   const sortMap: Record<string, Record<string, 1 | -1>> = {
@@ -462,6 +492,8 @@ export const setProductStock = async (req: Request, res: Response) => {
         notifyLowStock(product._id);
       }
 
+      await syncAutoPreOrderState(product._id, session);
+
       await logActivity(req, {
         action: "INVENTORY_STOCK_ADJUSTED",
         oldValue: { productId: product._id, stock: previous },
@@ -543,6 +575,8 @@ export const adjustStock = async (req: Request, res: Response) => {
       else if (product.lowStockThreshold > 0 && available <= product.lowStockThreshold) {
         notifyLowStock(product._id);
       }
+
+      await syncAutoPreOrderState(product._id, session);
     });
   } finally {
     await session.endSession();
@@ -596,6 +630,8 @@ export const recordDamage = async (req: Request, res: Response) => {
       });
 
       if (product.stock === 0) notifyStockOut(product._id);
+
+      await syncAutoPreOrderState(product._id, session);
     });
   } finally {
     await session.endSession();

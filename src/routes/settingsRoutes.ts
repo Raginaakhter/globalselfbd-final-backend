@@ -6,6 +6,8 @@ import {
   updateShipping,
   getNotificationSettings,
   updateNotificationSettings,
+  getPreorder,
+  updatePreorder,
 } from "../controllers/settingsController";
 import { authenticate, requirePermission } from "../middleware/auth";
 
@@ -19,5 +21,7 @@ router.get("/shipping", requirePermission("settings.view"), getShipping);
 router.put("/shipping", requirePermission("settings.update"), updateShipping);
 router.get("/notifications", requirePermission("settings.view"), getNotificationSettings);
 router.put("/notifications", requirePermission("settings.update"), updateNotificationSettings);
+router.get("/preorder", requirePermission("settings.view"), getPreorder);
+router.put("/preorder", requirePermission("settings.update"), updatePreorder);
 
 export default router;

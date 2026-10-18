@@ -3,6 +3,7 @@ const router = express.Router();
 import {
   getAllOrders,
   getOrderDetails,
+  getOrderProfit,
   updateOrderStatus,
   updatePaymentStatus,
   updatePreOrderFields,
@@ -15,6 +16,8 @@ import { authenticate, requirePermission } from "../middleware/auth";
 router.use(authenticate);
 
 router.get("/", requirePermission("orders.viewAll"), getAllOrders);
+// Per-order profit — defined BEFORE /:id so it isn't swallowed by the dynamic route.
+router.get("/:id/profit", requirePermission("reports.view"), getOrderProfit);
 router.get("/:id", requirePermission("orders.viewAll"), getOrderDetails);
 router.patch("/:id/status", requirePermission("orders.status"), updateOrderStatus);
 router.patch("/:id/payment-status", requirePermission("orders.paymentStatus"), updatePaymentStatus);

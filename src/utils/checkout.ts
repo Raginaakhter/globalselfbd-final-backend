@@ -569,8 +569,19 @@ export const buildOrderDraft = async (
 
   // Store pickup: never charge shipping. Delivery: existing per-city rules on the
   // amount after the coupon (admin discount does not change the shipping tier).
+  //
+  // Free-delivery override: when every billable line in the cart is a product
+  // flagged freeDelivery=true, shipping is waived. Combo lines break the override
+  // (combos don't carry a freeDelivery flag yet) and so does any mixed cart that
+  // contains even one paid-delivery product. Lines with an `issue` are ignored
+  // since they don't contribute to the subtotal either.
+  const billableLines = lines.filter((l) => l.issue === null);
+  const allFreeDelivery =
+    billableLines.length > 0 &&
+    billableLines.every((l) => l.product && l.product.freeDelivery === true && !l.combo);
+
   const shippingCost =
-    shippingInfo.fulfillmentMethod === "STORE_PICKUP"
+    shippingInfo.fulfillmentMethod === "STORE_PICKUP" || allFreeDelivery
       ? 0
       : calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
   const totalAmount = roundMoney(Math.max(0, subtotal - discount - adminDiscountAmount + shippingCost));

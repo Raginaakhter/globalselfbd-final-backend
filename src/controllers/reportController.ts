@@ -1,9 +1,11 @@
 import type { Request, Response } from "express";
 import type { PipelineStage } from "mongoose";
 import Order from "../models/Order";
+import StockMovement from "../models/StockMovement";
 import AppError from "../utils/AppError";
 import { queryString } from "../utils/validators";
 import { ORDER_STATUSES } from "../config/orderOptions";
+import { sumExpensesInRange } from "./expenseController";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 // All reports use Bangladesh time (UTC+6): "today" starts at 12:00 AM in Dhaka.
@@ -302,6 +304,164 @@ export const getSalesChart = async (req: Request, res: Response) => {
         orders: points.reduce((total, p) => total + p.orders, 0),
       },
       points,
+    },
+  });
+};
+
+// --------------------------------------------------------------------------
+// Profit & Loss report
+//
+// Business model:
+//   revenue       = Σ(subtotal − discount − adminDiscountAmount)   over delivered, non-refunded orders in [from, to]
+//   cogs          = Σ(|StockMovement.quantity| × unitCost)         over SALE movements linked to those orders
+//   grossProfit   = revenue − cogs
+//   expenses      = Σ(Expense.amount)                              in [from, to], grouped by expense type
+//   netProfit     = grossProfit − expenses.total
+//   margin        = netProfit / revenue  (percent, 0 when revenue is 0)
+//
+// Shipping is treated as pass-through: the customer pays shippingCost, the
+// shipping company receives it. If the business absorbs shipping it should
+// be entered as a DELIVERY_COST expense so it hits the P&L correctly.
+// --------------------------------------------------------------------------
+
+interface PnlTotals {
+  revenue: number;
+  cogs: number;
+  grossProfit: number;
+  expensesTotal: number;
+  expensesByType: Record<string, number>;
+  netProfit: number;
+  margin: number;        // percent, 2 decimals
+  orders: number;
+  shippingCollected: number;
+  discount: number;
+  adminDiscount: number;
+}
+
+const emptyPnl = (): PnlTotals => ({
+  revenue: 0,
+  cogs: 0,
+  grossProfit: 0,
+  expensesTotal: 0,
+  expensesByType: {},
+  netProfit: 0,
+  margin: 0,
+  orders: 0,
+  shippingCollected: 0,
+  discount: 0,
+  adminDiscount: 0,
+});
+
+const revenueForPeriod = async (from: Date, to: Date): Promise<Pick<PnlTotals, "revenue" | "orders" | "shippingCollected" | "discount" | "adminDiscount">> => {
+  const rows = await Order.aggregate<{
+    revenue: number; orders: number; shippingCollected: number; discount: number; adminDiscount: number;
+  }>([
+    { $match: { orderStatus: "DELIVERED", paymentStatus: { $ne: "REFUNDED" } } },
+    { $addFields: { reportDate: deliveredDate } },
+    { $match: { reportDate: { $gte: from, $lte: to } } },
+    {
+      $group: {
+        _id: null,
+        revenue: { $sum: { $subtract: [{ $subtract: ["$subtotal", "$discount"] }, { $ifNull: ["$adminDiscountAmount", 0] }] } },
+        shippingCollected: { $sum: "$shippingCost" },
+        discount: { $sum: "$discount" },
+        adminDiscount: { $sum: { $ifNull: ["$adminDiscountAmount", 0] } },
+        orders: { $sum: 1 },
+      },
+    },
+  ]);
+  const r = rows[0];
+  return {
+    revenue: round(r?.revenue || 0),
+    orders: r?.orders || 0,
+    shippingCollected: round(r?.shippingCollected || 0),
+    discount: round(r?.discount || 0),
+    adminDiscount: round(r?.adminDiscount || 0),
+  };
+};
+
+const cogsForPeriod = async (from: Date, to: Date): Promise<number> => {
+  const rows = await StockMovement.aggregate<{ cogs: number }>([
+    { $match: { type: "SALE", orderId: { $ne: null } } },
+    { $lookup: { from: "orders", localField: "orderId", foreignField: "_id", as: "order" } },
+    { $unwind: "$order" },
+    { $match: { "order.orderStatus": "DELIVERED" } },
+    { $addFields: { reportDate: { $ifNull: ["$order.deliveredAt", "$order.updatedAt"] } } },
+    { $match: { reportDate: { $gte: from, $lte: to } } },
+    {
+      $group: {
+        _id: null,
+        cogs: { $sum: { $multiply: [{ $abs: "$quantity" }, { $ifNull: ["$unitCost", 0] }] } },
+      },
+    },
+  ]);
+  return round(rows[0]?.cogs || 0);
+};
+
+const buildPnlForPeriod = async (from: Date, to: Date): Promise<PnlTotals> => {
+  const [rev, cogs, exp] = await Promise.all([
+    revenueForPeriod(from, to),
+    cogsForPeriod(from, to),
+    sumExpensesInRange(from, to),
+  ]);
+  const grossProfit = round(rev.revenue - cogs);
+  const netProfit = round(grossProfit - exp.total);
+  const margin = rev.revenue > 0 ? Math.round((netProfit / rev.revenue) * 10000) / 100 : 0;
+  return {
+    ...emptyPnl(),
+    ...rev,
+    cogs,
+    grossProfit,
+    expensesTotal: exp.total,
+    expensesByType: exp.byType,
+    netProfit,
+    margin,
+  };
+};
+
+// @desc    Profit & Loss summary across rolling windows (today, 7d, 30d, ...),
+//          or for a single custom date range when `fromDate`/`toDate` are given.
+// @route   GET /api/reports/pnl
+// @access  reports.view
+export const getProfitLossSummary = async (req: Request, res: Response) => {
+  const fromDate = queryString(req.query.fromDate);
+  const toDate = queryString(req.query.toDate);
+
+  if (fromDate || toDate) {
+    const from = fromDate ? new Date(fromDate) : new Date(0);
+    const to = toDate ? new Date(toDate) : new Date();
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      throw new AppError("fromDate / toDate must be valid ISO dates", 400);
+    }
+    const totals = await buildPnlForPeriod(from, to);
+    return res.status(200).json({
+      success: true,
+      message: "Profit & Loss fetched successfully",
+      data: {
+        currency: "BDT",
+        timezone: "Asia/Dhaka (UTC+6)",
+        range: { from, to, label: "Custom" },
+        totals,
+      },
+    });
+  }
+
+  const periods = buildPeriods();
+  const totals = await Promise.all(periods.map((p) => buildPnlForPeriod(p.from, p.to)));
+
+  return res.status(200).json({
+    success: true,
+    message: "Profit & Loss fetched successfully",
+    data: {
+      currency: "BDT",
+      timezone: "Asia/Dhaka (UTC+6)",
+      periods: periods.map((p, i) => ({
+        key: p.key,
+        label: p.label,
+        from: p.from,
+        to: p.to,
+        totals: totals[i],
+      })),
     },
   });
 };

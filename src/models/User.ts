@@ -66,16 +66,20 @@ const userSchema = new Schema<IUser, UserModel, IUserMethods>(
       type: String,
       trim: true,
       default: "",
-      index: { unique: true, sparse: true, partialFilterExpression: { phoneNumber: { $type: "string", $ne: "" } } },
+      // Partial-unique: enforced only on non-empty strings. (MongoDB forbids
+      // mixing `sparse: true` with `partialFilterExpression`, and `$ne` isn't
+      // supported inside a partial filter — `$gt: ""` is the standard idiom
+      // for "any non-empty string".)
+      index: { unique: true, partialFilterExpression: { phoneNumber: { $type: "string", $gt: "" } } },
     },
-    // Sparse+unique for the same reason: email is optional for customers now.
+    // Email is optional for phone-first customers.
     email: {
       type: String,
       lowercase: true,
       trim: true,
       default: "",
       match: [/^$|^\S+@\S+\.\S+$/, "Please provide a valid email"],
-      index: { unique: true, sparse: true, partialFilterExpression: { email: { $type: "string", $ne: "" } } },
+      index: { unique: true, partialFilterExpression: { email: { $type: "string", $gt: "" } } },
     },
     password: {
       type: String,

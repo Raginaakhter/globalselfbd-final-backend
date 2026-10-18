@@ -4,6 +4,8 @@ import InventoryLot from "../models/InventoryLot";
 import StockMovement, { type MovementType } from "../models/StockMovement";
 import AppError from "./AppError";
 import { notifyStockOut, notifyLowStock } from "./adminAlerts";
+import { getPreorderConfig } from "./preorder";
+import { PRE_ORDER } from "../config/orderOptions";
 
 type ProductRef = Types.ObjectId | string;
 
@@ -12,6 +14,45 @@ const roundMoney = (n: number): number => Math.round(n * 100) / 100;
 // Compute "available" (what a customer may actually buy right now).
 export const availableOf = (product: Pick<ProductDocument, "stock" | "reserved">): number =>
   Math.max(0, (product.stock || 0) - (product.reserved || 0));
+
+// Keep isPreOrder in sync with stock when the site has auto-pre-order enabled.
+// Called from every stock-mutating path so the admin never has to flip pre-order
+// manually on a stock-out. Idempotent: if the product is already in the desired
+// state (or admin-managed), it does nothing.
+//
+//   stock == 0 + autoEnable + not currently pre-order  → enable (source=AUTO)
+//   stock >  0 + currently pre-order with source=AUTO  → disable (clear source)
+//   source == MANUAL                                   → never touched
+export const syncAutoPreOrderState = async (
+  productId: ProductRef,
+  session?: ClientSession
+): Promise<void> => {
+  const product = await Product.findById(productId)
+    .select("stock isPreOrder preOrderSource preOrderMinDays")
+    .session(session ?? null);
+  if (!product) return;
+
+  if (product.preOrderSource === "MANUAL") return;
+
+  const config = await getPreorderConfig();
+  const outOfStock = (product.stock || 0) <= 0;
+
+  if (outOfStock && !product.isPreOrder && config.autoEnableOnStockOut) {
+    product.isPreOrder = true;
+    product.preOrderSource = "AUTO";
+    const days = Math.max(config.defaultPreOrderDays, PRE_ORDER.MIN_DELIVERY_DAYS);
+    product.preOrderMinDays = Math.min(days, PRE_ORDER.MAX_DELIVERY_DAYS);
+    await product.save({ session, validateBeforeSave: false });
+    return;
+  }
+
+  if (!outOfStock && product.isPreOrder && product.preOrderSource === "AUTO") {
+    product.isPreOrder = false;
+    product.preOrderSource = null;
+    product.preOrderMinDays = 0;
+    await product.save({ session, validateBeforeSave: false });
+  }
+};
 
 // Record an audit entry. All movement writes go through here so the stock-movement
 // report is always a complete truth. Non-transactional callers may omit `session`.
@@ -278,6 +319,7 @@ export const finalizeSale = async (
   }
 
   if (updated.stock === 0) notifyStockOut(updated._id);
+  await syncAutoPreOrderState(productId, session);
 
   return { consumed, cogs, revenue: roundMoney(revenue) };
 };
@@ -314,6 +356,7 @@ export const returnToStock = async (
     },
     session
   );
+  await syncAutoPreOrderState(productId, session);
 };
 
 // Record a damaged return (no restock): damagedQuantity++ and returnedQuantity++.

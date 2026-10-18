@@ -47,6 +47,17 @@ export interface IProduct {
   // promises delivery in at least `preOrderMinDays` days (floor: PRE_ORDER.MIN_DELIVERY_DAYS).
   isPreOrder: boolean;
   preOrderMinDays: number;
+  // How isPreOrder was set:
+  //   "MANUAL" — admin flipped it from the product editor; never clobbered automatically.
+  //   "AUTO"   — the system turned it on when stock dropped to 0; auto-cleared on restock.
+  //   null     — not a pre-order product.
+  preOrderSource: "MANUAL" | "AUTO" | null;
+  // Admin override: ship this product for free (waive the per-city delivery
+  // charge in checkout when the whole cart is free-delivery). System rule:
+  // discounted products — customerSpecialPrice set below customerSellPrice —
+  // always ship at the normal charge; validateProductRules silently clamps
+  // freeDelivery=true back to false in that case.
+  freeDelivery: boolean;
   // Set the first time stock reaches 0 after being positive; cleared when stock is
   // replenished. Prevents the admin stock-out alert from firing more than once
   // per out-of-stock cycle.
@@ -178,6 +189,12 @@ const productSchema = new Schema<IProduct>(
         message: "Pre-order days must be a whole number",
       },
     },
+    preOrderSource: {
+      type: String,
+      enum: { values: ["MANUAL", "AUTO", null], message: "preOrderSource must be MANUAL or AUTO" },
+      default: null,
+    },
+    freeDelivery: { type: Boolean, default: false, index: true },
   },
   {
     timestamps: true,

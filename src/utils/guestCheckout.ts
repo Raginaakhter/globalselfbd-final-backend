@@ -297,8 +297,18 @@ export const buildGuestOrderDraft = async (
     : null;
   const adminDiscountAmount = resolvedAdminDiscount ? resolvedAdminDiscount.amount : 0;
 
+  // Free-delivery override mirrors the logged-in checkout: a cart made up
+  // entirely of freeDelivery=true product lines (no combos) ships for free.
+  const allFreeDelivery =
+    items.length > 0 &&
+    items.every((i) => {
+      if (i.comboId || !i.productId) return false;
+      const product = productById.get(String(i.productId));
+      return !!product?.freeDelivery;
+    });
+
   const shippingCost =
-    shippingInfo.fulfillmentMethod === "STORE_PICKUP"
+    shippingInfo.fulfillmentMethod === "STORE_PICKUP" || allFreeDelivery
       ? 0
       : calculateShippingCharge(await getShippingConfig(), shippingInfo.city, subtotal - discount);
   const totalAmount = roundMoney(Math.max(0, subtotal - discount - adminDiscountAmount + shippingCost));

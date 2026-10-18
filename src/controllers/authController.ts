@@ -15,7 +15,7 @@ import {
 import { isNonEmptyString, normalizeBdPhone } from "../utils/validators";
 import { isValidImageUrl } from "../utils/imageValidation";
 import { isEmailConfigured, sendPasswordResetOtpEmail, sendLoginOtpEmail } from "../utils/sendEmail";
-// import { isSmsConfigured, sendPasswordResetOtpSms, sendLoginOtpSms } from "../utils/sendSms";
+import { isSmsConfigured, sendLoginOtpSms } from "../utils/sendSms";
 import crypto from "crypto";
 import AuthOtp, { hashOtpWithSecret } from "../models/AuthOtp";
 import { getAuthUser } from "../middleware/auth";
@@ -506,25 +506,23 @@ const LOGIN_OTP_RESEND_SECONDS = 60;
 const LOGIN_OTP_MAX_ATTEMPTS = 5;
 const LOGIN_OTP_INVALID = "OTP is invalid or has expired. Please request a new one";
 
-// Validate identifier as email (phone OTP is temporarily commented out).
+// Validate identifier as email or Bangladeshi phone number.
 const classifyIdentifier = (
   raw: unknown
-): { identifier: string; channel: "email" } => {
-  if (!isNonEmptyString(raw)) throw new AppError("Please provide your email", 400);
+): { identifier: string; channel: "email" | "sms" } => {
+  if (!isNonEmptyString(raw)) {
+    throw new AppError("Please provide your email or phone number", 400);
+  }
   const trimmed = raw.trim();
   if (trimmed.includes("@")) {
     if (!EMAIL_REGEX.test(trimmed)) throw new AppError("Please provide a valid email", 400);
     return { identifier: trimmed.toLowerCase(), channel: "email" };
   }
-  /*
-  // Phone OTP temporarily commented out:
   const phone = normalizeBdPhone(trimmed);
   if (!phone) {
     throw new AppError("Please provide a valid Bangladeshi phone number or email", 400);
   }
   return { identifier: phone, channel: "sms" };
-  */
-  throw new AppError("Phone number login/registration is temporarily disabled. Please provide a valid email", 400);
 };
 
 const generateOtp = (): string =>
@@ -537,12 +535,9 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
   const body = (req.body || {}) as Body;
   const { identifier, channel } = classifyIdentifier(body.identifier);
 
-  /*
-  // SMS service check temporarily commented out:
   if (channel === "sms" && !isSmsConfigured() && !isDev) {
     throw new AppError("SMS service is not configured", 503);
   }
-  */
   if (channel === "email" && !isEmailConfigured() && !isDev) {
     throw new AppError("Email service is not configured", 503);
   }
@@ -578,8 +573,6 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
 
   let delivered = false;
   try {
-    /*
-    // SMS OTP delivery temporarily commented out:
     if (channel === "sms") {
       if (isSmsConfigured()) {
         const result = await sendLoginOtpSms(identifier, otp, LOGIN_OTP_EXPIRE_MINUTES);
@@ -587,9 +580,7 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
       } else if (isDev) {
         delivered = true;
       }
-    } else
-    */
-    if (channel === "email") {
+    } else if (channel === "email") {
       if (isEmailConfigured()) {
         await sendLoginOtpEmail(identifier, otp, LOGIN_OTP_EXPIRE_MINUTES);
         delivered = true;
@@ -607,7 +598,7 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
 
   res.status(200).json({
     success: true,
-    message: "OTP sent to your email",
+    message: channel === "sms" ? "OTP sent to your phone" : "OTP sent to your email",
     data: {
       channel,
       expiresInMinutes: LOGIN_OTP_EXPIRE_MINUTES,
@@ -620,7 +611,7 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
 // Verify an OTP. On success: register with email if the account doesn't exist, else log in.
 export const verifyLoginOtp = async (req: Request, res: Response) => {
   const body = (req.body || {}) as Body;
-  const { identifier } = classifyIdentifier(body.identifier);
+  const { identifier, channel } = classifyIdentifier(body.identifier);
   const { otp, fullName } = body;
   assertOtpFormat(otp);
 
@@ -650,16 +641,15 @@ export const verifyLoginOtp = async (req: Request, res: Response) => {
     throw new AppError(`Invalid OTP. ${left} attempt(s) left`, 400);
   }
 
-  // OTP is one-time use: remove the staged doc immediately on success.
-  await AuthOtp.deleteOne({ _id: staged._id });
-
-  // Find or create the user via email.
-  // Phone registration is commented out; email registration with OTP is active:
-  const filter = { email: identifier };
-  /*
+  // Find or create the user by whichever channel the OTP was issued for.
+  // The OTP is deleted only AFTER the user is resolved, so a transient DB error
+  // during create leaves the code reusable instead of wasting it.
   const filter = channel === "sms" ? { phoneNumber: identifier } : { email: identifier };
-  */
   let user = await User.findOne(filter).populate<{ role: RoleDocument | null }>("role");
+
+  // Default name for a brand-new account: for email, the local-part of the
+  // address; for phone, a generic "Customer" placeholder the user can edit later.
+  const defaultName = channel === "sms" ? "Customer" : identifier.split("@")[0].slice(0, 100);
 
   if (!user) {
     const customerRole = await Role.findOne({ name: ROLES.CUSTOMER, status: "ACTIVE" });
@@ -667,24 +657,20 @@ export const verifyLoginOtp = async (req: Request, res: Response) => {
     const name =
       typeof fullName === "string" && fullName.trim()
         ? fullName.trim().slice(0, 100)
-        : identifier.split("@")[0].slice(0, 100);
-        /*
-        : channel === "sms"
-          ? "Customer"
-          : identifier.split("@")[0].slice(0, 100);
-        */
+        : defaultName;
     const created = await User.create({
       fullName: name,
-      email: identifier,
-      /*
       ...(channel === "sms" ? { phoneNumber: identifier } : { email: identifier }),
-      */
       role: customerRole._id,
     });
     user = await created.populate<{ role: RoleDocument | null }>("role");
   } else {
     // Allow a one-time name correction if the account was created with the auto-generated name.
-    if (typeof fullName === "string" && fullName.trim() && (user.fullName === "Customer" || user.fullName === identifier.split("@")[0].slice(0, 100))) {
+    if (
+      typeof fullName === "string" &&
+      fullName.trim() &&
+      (user.fullName === "Customer" || user.fullName === defaultName)
+    ) {
       user.fullName = fullName.trim().slice(0, 100);
       await user.save({ validateBeforeSave: false });
     }
@@ -693,6 +679,9 @@ export const verifyLoginOtp = async (req: Request, res: Response) => {
   if (user.status !== "ACTIVE") {
     throw new AppError("Your account is inactive. Please contact support", 403);
   }
+
+  // User is good — consume the one-time OTP now.
+  await AuthOtp.deleteOne({ _id: staged._id });
 
   await sendTokenResponse(user, 200, "Login successful", req, res);
 };

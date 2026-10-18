@@ -16,6 +16,8 @@ import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryStri
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
 import { finalizeSale, releaseReservation } from "../utils/inventory";
 import { notifyOrderPlaced, notifyDeliveredAndReview } from "../utils/orderEmails";
+import StockMovement from "../models/StockMovement";
+import Expense from "../models/Expense";
 import {
   CANCELLABLE_STATUSES,
   ORDER_STATUS,
@@ -227,6 +229,76 @@ export const getAllOrders = async (req: Request, res: Response) => {
         };
       }),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    },
+  });
+};
+
+// @desc    Per-order profit breakdown: revenue, COGS, linked expenses, net.
+//          COGS comes from SALE stock movements for this order (the FIFO lot
+//          costs captured at delivery). Linked expenses come from the Expense
+//          model with orderId matching this order.
+// @route   GET /api/admin/orders/:id/profit
+// @access  orders.viewAll
+export const getOrderProfit = async (req: Request, res: Response) => {
+  const order = await findOrderOr404(String(req.params.id));
+  const round = (n: number) => Math.round(n * 100) / 100;
+
+  const [cogsRows, expenseRows] = await Promise.all([
+    StockMovement.aggregate<{ cogs: number; units: number }>([
+      { $match: { type: "SALE", orderId: order._id } },
+      {
+        $group: {
+          _id: null,
+          cogs: { $sum: { $multiply: [{ $abs: "$quantity" }, { $ifNull: ["$unitCost", 0] }] } },
+          units: { $sum: { $abs: "$quantity" } },
+        },
+      },
+    ]),
+    Expense.aggregate<{ _id: string; amount: number }>([
+      { $match: { orderId: order._id } },
+      { $group: { _id: "$type", amount: { $sum: "$amount" } } },
+    ]),
+  ]);
+
+  const cogs = round(cogsRows[0]?.cogs || 0);
+  const units = cogsRows[0]?.units || 0;
+
+  const expensesByType: Record<string, number> = {};
+  let expensesTotal = 0;
+  for (const row of expenseRows) {
+    expensesByType[row._id] = round(row.amount);
+    expensesTotal += row.amount;
+  }
+  expensesTotal = round(expensesTotal);
+
+  const revenue = round(order.subtotal - order.discount - (order.adminDiscountAmount || 0));
+  const grossProfit = round(revenue - cogs);
+  const netProfit = round(grossProfit - expensesTotal);
+  const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+
+  res.status(200).json({
+    success: true,
+    message: "Order profit fetched successfully",
+    data: {
+      currency: "BDT",
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      orderStatus: order.orderStatus,
+      paymentStatus: order.paymentStatus,
+      units,
+      revenue,
+      cogs,
+      grossProfit,
+      shippingCollected: round(order.shippingCost),
+      discount: round(order.discount),
+      adminDiscount: round(order.adminDiscountAmount || 0),
+      expensesTotal,
+      expensesByType,
+      netProfit,
+      margin,
+      note: order.orderStatus === "DELIVERED"
+        ? null
+        : "COGS and net profit are only final after the order is DELIVERED (sale is finalized).",
     },
   });
 };

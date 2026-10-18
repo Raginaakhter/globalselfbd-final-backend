@@ -15,6 +15,13 @@ import {
   isInsideDhaka,
   type ShippingConfig,
 } from "../utils/shipping";
+import {
+  PREORDER_KEY,
+  getPreorderConfig,
+  defaultPreorderConfig,
+  type PreorderConfig,
+} from "../utils/preorder";
+import { PRE_ORDER } from "../config/orderOptions";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
 
@@ -148,6 +155,7 @@ const parseCharge = (value: unknown, label: string): number => {
 
 const shippingResponse = (config: ShippingConfig) => ({
   currency: "BDT",
+  deliveryChargesEnabled: config.deliveryChargesEnabled,
   insideDhaka: config.insideDhaka,
   outsideDhaka: config.outsideDhaka,
   freeShippingMinimum: config.freeShippingMinimum,
@@ -169,12 +177,26 @@ export const getShipping = async (req: Request, res: Response) => {
 // @route   PUT /api/settings/shipping
 // @access  settings.update
 export const updateShipping = async (req: Request, res: Response) => {
-  const { insideDhaka, outsideDhaka, freeShippingMinimum } = (req.body || {}) as Body;
-  if (insideDhaka === undefined && outsideDhaka === undefined && freeShippingMinimum === undefined) {
-    throw new AppError("Send insideDhaka, outsideDhaka and/or freeShippingMinimum", 400);
+  const { deliveryChargesEnabled, insideDhaka, outsideDhaka, freeShippingMinimum } = (req.body || {}) as Body;
+  if (
+    deliveryChargesEnabled === undefined &&
+    insideDhaka === undefined &&
+    outsideDhaka === undefined &&
+    freeShippingMinimum === undefined
+  ) {
+    throw new AppError(
+      "Send deliveryChargesEnabled, insideDhaka, outsideDhaka and/or freeShippingMinimum",
+      400
+    );
   }
 
   const next = await getShippingConfig();
+  if (deliveryChargesEnabled !== undefined) {
+    if (typeof deliveryChargesEnabled !== "boolean") {
+      throw new AppError("deliveryChargesEnabled must be true or false", 400);
+    }
+    next.deliveryChargesEnabled = deliveryChargesEnabled;
+  }
   if (insideDhaka !== undefined) next.insideDhaka = parseCharge(insideDhaka, "insideDhaka");
   if (outsideDhaka !== undefined) next.outsideDhaka = parseCharge(outsideDhaka, "outsideDhaka");
   if (freeShippingMinimum !== undefined) {
@@ -240,6 +262,74 @@ export const updateNotificationSettings = async (req: Request, res: Response) =>
     success: true,
     message: "Notification settings updated successfully",
     data: next,
+  });
+};
+
+// ---------- Pre-order config ----------
+//
+// Controls the auto-switch to pre-order when a product's stock hits 0.
+// Only admin-set (`preOrderSource: "MANUAL"`) products are left alone.
+
+const preorderResponse = (config: PreorderConfig) => ({
+  autoEnableOnStockOut: config.autoEnableOnStockOut,
+  defaultPreOrderDays: config.defaultPreOrderDays,
+  minDeliveryDays: PRE_ORDER.MIN_DELIVERY_DAYS,
+  maxDeliveryDays: PRE_ORDER.MAX_DELIVERY_DAYS,
+});
+
+// @desc    Pre-order auto-switch settings (admin editor)
+// @route   GET /api/settings/preorder
+// @access  settings.view
+export const getPreorder = async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    message: "Pre-order settings fetched successfully",
+    data: preorderResponse(await getPreorderConfig()),
+  });
+};
+
+// @desc    Change pre-order auto-switch settings (send only the fields to update).
+// @route   PUT /api/settings/preorder
+// @access  settings.update
+export const updatePreorder = async (req: Request, res: Response) => {
+  const body = (req.body || {}) as Body;
+  const { autoEnableOnStockOut, defaultPreOrderDays } = body;
+  if (autoEnableOnStockOut === undefined && defaultPreOrderDays === undefined) {
+    throw new AppError("Send autoEnableOnStockOut and/or defaultPreOrderDays", 400);
+  }
+
+  const next = { ...defaultPreorderConfig(), ...(await getPreorderConfig()) };
+
+  if (autoEnableOnStockOut !== undefined) {
+    if (typeof autoEnableOnStockOut !== "boolean") {
+      throw new AppError("autoEnableOnStockOut must be true or false", 400);
+    }
+    next.autoEnableOnStockOut = autoEnableOnStockOut;
+  }
+
+  if (defaultPreOrderDays !== undefined) {
+    const n = typeof defaultPreOrderDays === "string" && defaultPreOrderDays.trim() !== ""
+      ? Number(defaultPreOrderDays)
+      : defaultPreOrderDays;
+    if (
+      typeof n !== "number" ||
+      !Number.isInteger(n) ||
+      n < PRE_ORDER.MIN_DELIVERY_DAYS ||
+      n > PRE_ORDER.MAX_DELIVERY_DAYS
+    ) {
+      throw new AppError(
+        `defaultPreOrderDays must be a whole number between ${PRE_ORDER.MIN_DELIVERY_DAYS} and ${PRE_ORDER.MAX_DELIVERY_DAYS}`,
+        400
+      );
+    }
+    next.defaultPreOrderDays = n;
+  }
+
+  await SiteSetting.findOneAndUpdate({ key: PREORDER_KEY }, { $set: { value: next } }, { upsert: true });
+  res.status(200).json({
+    success: true,
+    message: "Pre-order settings updated successfully",
+    data: preorderResponse(next),
   });
 };
 

@@ -93,6 +93,8 @@ type ProductFields = Partial<
     | "slug"
     | "isPreOrder"
     | "preOrderMinDays"
+    | "preOrderSource"
+    | "freeDelivery"
   >
 > & { categoryId?: string };
 
@@ -206,6 +208,8 @@ const parseProductFields = (body: Body): ProductFields => {
 
   if (body.isPreOrder !== undefined) {
     out.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
+    // Mark the source so the auto-stock-out sync never clobbers an admin's choice.
+    out.preOrderSource = out.isPreOrder ? "MANUAL" : null;
   }
   if (body.preOrderMinDays !== undefined) {
     if (isBlank(body.preOrderMinDays)) {
@@ -222,6 +226,10 @@ const parseProductFields = (body: Body): ProductFields => {
     }
   }
 
+  if (body.freeDelivery !== undefined) {
+    out.freeDelivery = toBoolean(body.freeDelivery, "freeDelivery");
+  }
+
   return out;
 };
 
@@ -235,12 +243,28 @@ type RuleFields = Pick<
   | "sizes"
   | "isPreOrder"
   | "preOrderMinDays"
+  | "freeDelivery"
 >;
+
+// A product is "discounted" when the special price is set below the regular
+// sell price. Equal prices don't count — nothing was actually taken off.
+export const isProductDiscounted = (
+  p: Pick<IProduct, "customerSpecialPrice" | "customerSellPrice">
+): boolean =>
+  p.customerSpecialPrice != null &&
+  p.customerSpecialPrice > 0 &&
+  p.customerSpecialPrice < p.customerSellPrice;
 
 // Rules that depend on several fields; runs on the final (merged) product
 const validateProductRules = (p: RuleFields): void => {
   if (p.customerSpecialPrice != null && p.customerSpecialPrice > p.customerSellPrice) {
     throw new AppError("Customer special price cannot be greater than customer sell price", 400);
+  }
+
+  // Discounted products must always carry the normal delivery charge; the
+  // admin cannot waive shipping on items that are already price-reduced.
+  if (isProductDiscounted(p) && p.freeDelivery) {
+    p.freeDelivery = false;
   }
 
   const hasUnit = p.unit != null;
@@ -316,6 +340,8 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
   const availability = queryString(req.query.availability);
   const isFabric = queryString(req.query.isFabric);
   const hasDiscount = queryString(req.query.hasDiscount);
+  const isPreOrder = queryString(req.query.isPreOrder);
+  const preOrderSource = queryString(req.query.preOrderSource);
   const minPrice = queryString(req.query.minPrice);
   const maxPrice = queryString(req.query.maxPrice);
   const sort = queryString(req.query.sort);
@@ -351,6 +377,18 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
   if (hasDiscount !== undefined) {
     const want = toBoolean(hasDiscount, "hasDiscount");
     filter.customerSpecialPrice = want ? { $ne: null } : null;
+  }
+  // Pre-order filters so the website's pre-order page can list these products.
+  if (isPreOrder !== undefined) filter.isPreOrder = toBoolean(isPreOrder, "isPreOrder");
+  if (preOrderSource) {
+    if (!["AUTO", "MANUAL", "NONE"].includes(preOrderSource)) {
+      throw new AppError("preOrderSource must be AUTO, MANUAL or NONE", 400);
+    }
+    if (preOrderSource === "NONE") {
+      and.push({ $or: [{ preOrderSource: null }, { preOrderSource: { $exists: false } }] });
+    } else {
+      filter.preOrderSource = preOrderSource;
+    }
   }
   if (minPrice !== undefined || maxPrice !== undefined) {
     const range: Record<string, number> = {};
@@ -509,6 +547,9 @@ export const updateProduct = async (req: Request, res: Response) => {
   const merged: RuleFields = { ...(product.toObject() as unknown as RuleFields), ...(fields as Partial<RuleFields>) };
   validateProductRules(merged);
   fields.sizes = merged.sizes;
+  // Pick up the discounted-override clamp (freeDelivery=false when a special
+  // price makes the product discounted) so the saved doc matches the rule.
+  fields.freeDelivery = merged.freeDelivery;
 
   if (fields.status === "ACTIVE" && product.status !== "ACTIVE" && fields.categoryId === undefined) {
     if (product.categoryId.status !== "ACTIVE") {
@@ -793,6 +834,8 @@ export const updateProductPreOrder = async (req: Request, res: Response) => {
 
   if (body.isPreOrder !== undefined) {
     product.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
+    // Admin explicitly set it — lock out the auto-stock-out sync for this product.
+    product.preOrderSource = product.isPreOrder ? "MANUAL" : null;
   }
   if (body.preOrderMinDays !== undefined) {
     if (isBlank(body.preOrderMinDays)) {

@@ -69,6 +69,7 @@ export const toProductResponse = (
     availability: getAvailability(p.stock, p.isPreOrder),
     isPreOrder: p.isPreOrder,
     preOrderMinDays: p.preOrderMinDays,
+    freeDelivery: !!p.freeDelivery,
     // Approved reviews only (for the product card and details page)
     rating: { averageRating: p.ratingAverage ?? 0, totalReviews: p.ratingCount ?? 0 },
     status: p.status,

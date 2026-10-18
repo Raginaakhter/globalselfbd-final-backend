@@ -37,6 +37,7 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   customers: ["view", "update"],
   sales: ["view"],
   reports: ["view"],
+  expenses: ["view", "create", "update", "delete"],
   coupons: ["view", "create", "update", "delete"],
   combos: ["view", "create", "update", "delete"],
   offers: ["view", "create", "update", "delete"],
