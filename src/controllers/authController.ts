@@ -457,6 +457,10 @@ export const forgotPassword = async (req: Request, res: Response) => {
     console.log(`🔑 Password reset OTP for ${user.email}: ${otp}`);
   }
 
+  // SECURITY: never return the OTP in the API response, not even in dev. Dev
+  // debugging reads it from the server console log above. Returning it here
+  // used to leak into frontend state and let the UI auto-fill the input,
+  // which defeats the point of sending it over email/SMS.
   return res.status(200).json({
     success: true,
     message: genericMessage,
@@ -464,7 +468,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
       channel: label,
       expiresInMinutes: minutes,
       resendAfterSeconds: OTP_RESEND_SECONDS,
-      ...(isDev ? { devOnly: { delivered, otp } } : {}),
+      ...(isDev ? { devOnly: { delivered } } : {}),
     },
   });
 };
@@ -596,6 +600,9 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
 
   if (isDev) console.log(`🔑 Login OTP for ${identifier}: ${otp}`);
 
+  // SECURITY: OTP never leaves the server over HTTP — dev debugging reads it
+  // from the console log above. Returning it in `devOnly` used to let the
+  // frontend auto-fill the OTP input, bypassing the email/SMS verification.
   res.status(200).json({
     success: true,
     message: channel === "sms" ? "OTP sent to your phone" : "OTP sent to your email",
@@ -603,7 +610,7 @@ export const requestLoginOtp = async (req: Request, res: Response) => {
       channel,
       expiresInMinutes: LOGIN_OTP_EXPIRE_MINUTES,
       resendAfterSeconds: LOGIN_OTP_RESEND_SECONDS,
-      ...(isDev ? { devOnly: { delivered, otp } } : {}),
+      ...(isDev ? { devOnly: { delivered } } : {}),
     },
   });
 };

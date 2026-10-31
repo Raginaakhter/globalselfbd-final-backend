@@ -23,6 +23,7 @@ import {
   isSteadfastConfigured,
   isSteadfastDeliveryStatus,
   STEADFAST_DELIVERY_STATUSES,
+  STEADFAST_LIMITS,
   FINAL_DELIVERED_STATUSES,
   type SteadfastDeliveryStatus,
 } from "../config/steadfast";
@@ -32,6 +33,7 @@ import {
   statusByInvoice,
   statusByTrackingCode,
   getBalance,
+  validateCreateOrderPayload,
   SteadfastTimeoutError,
   SteadfastApiError,
 } from "../utils/steadfastClient";
@@ -155,9 +157,20 @@ export const bookShipment = async (req: Request, res: Response): Promise<void> =
   // Idempotency key = order id + an admin-supplied client token OR a server
   // generated UUID. Two clicks within the same tab share the token so the
   // second attempt bounces off the unique index.
-  const clientToken = typeof body.idempotencyKey === "string" && body.idempotencyKey.trim()
-    ? body.idempotencyKey.trim()
-    : crypto.randomUUID();
+  //
+  // Admin-supplied token is capped and sanitized: it ends up in a unique DB
+  // index and in log lines, so we never trust an arbitrary string.
+  const rawClientToken =
+    typeof body.idempotencyKey === "string" && body.idempotencyKey.trim()
+      ? body.idempotencyKey.trim()
+      : "";
+  if (rawClientToken && !/^[A-Za-z0-9_.:-]{1,100}$/.test(rawClientToken)) {
+    throw new AppError(
+      "idempotencyKey may only contain letters, digits, '_', '.', ':', '-' and must be 1-100 characters",
+      400
+    );
+  }
+  const clientToken = rawClientToken || crypto.randomUUID();
   const idempotencyKey = `${order._id.toString()}:${clientToken}`;
 
   // Build the pre-booking snapshot. We DO NOT create the row yet — writing it
@@ -179,6 +192,22 @@ export const bookShipment = async (req: Request, res: Response): Promise<void> =
       .slice(0, 250),
     total_lot: items.reduce((sum, i) => sum + i.quantity, 0),
   };
+
+  // Pre-validate before persisting anything. Local validation errors (bad
+  // phone, over-limit COD, missing name) are the caller's fault and should
+  // surface as 400 directly — not create a FAILED shipment row that then
+  // needs manual cleanup.
+  //
+  // The Steadfast single-parcel COD ceiling gets a plain-language hint so
+  // the admin knows what to do (collect advance payment or split the order).
+  if (codAmount > STEADFAST_LIMITS.COD_MAX) {
+    throw new AppError(
+      `COD amount ৳${codAmount} exceeds Steadfast's single-parcel limit of ৳${STEADFAST_LIMITS.COD_MAX}. ` +
+        `Collect an advance payment to bring the outstanding amount under the limit, or split the shipment.`,
+      400
+    );
+  }
+  validateCreateOrderPayload(payload);
 
   await logActivity(req, {
     action: "COURIER_BOOKING_SUBMITTED",
@@ -470,6 +499,138 @@ export const syncShipmentStatus = async (req: Request, res: Response) => {
 };
 
 // --------------------------------------------------------------------------
+// POST /api/admin/courier/shipments/sync-pending — bulk refresh non-final
+// shipments. Steadfast has no webhook, so this is the admin-triggered backfill
+// (or can be hit from an external scheduler). It is deliberately conservative:
+//
+//   - Only shipments that successfully booked AND are not in a final status
+//     are polled, oldest-synced first.
+//   - A hard batch cap (BULK_SYNC_LIMIT) is enforced server-side; clients
+//     cannot ask for more. Combined with per-caller rate limiting at the
+//     route layer, this bounds outbound traffic to Steadfast.
+//   - API calls run sequentially (never in parallel) to avoid thundering the
+//     courier endpoints during an incident window.
+//   - Per-shipment failures are isolated: one timeout does not stop the loop,
+//     the error is recorded on the shipment and the batch continues.
+// --------------------------------------------------------------------------
+const BULK_SYNC_LIMIT = 50;
+
+export const syncPendingShipments = async (req: Request, res: Response) => {
+  assertSteadfastConfigured();
+
+  const body = (req.body || {}) as Body;
+  const rawLimit = typeof body.limit === "number" ? body.limit : Number(body.limit);
+  const requestedLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : BULK_SYNC_LIMIT;
+  const limit = Math.min(requestedLimit, BULK_SYNC_LIMIT);
+
+  // Non-final = anything the courier can still mutate. Approval-pending
+  // statuses are intentionally included — they can flip to final soon.
+  const nonFinal = STEADFAST_DELIVERY_STATUSES.filter(
+    (status) => !FINAL_DELIVERED_STATUSES.includes(status) && status !== "cancelled"
+  );
+  const candidates = await CourierShipment.find({
+    bookingStatus: "SUCCESS",
+    supersededByShipmentId: null,
+    deliveryStatus: { $in: nonFinal },
+  })
+    .sort({ lastDeliveryStatusSyncedAt: 1 })
+    .limit(limit);
+
+  const actor = getAuthUser(req)._id;
+  const summary = {
+    requested: limit,
+    processed: 0,
+    changed: 0,
+    unchanged: 0,
+    failed: 0,
+    results: [] as Array<{
+      shipmentId: string;
+      previousStatus: string;
+      newStatus?: string;
+      error?: string;
+    }>,
+  };
+
+  for (const shipment of candidates) {
+    summary.processed += 1;
+    const previous = shipment.deliveryStatus;
+    try {
+      let newStatus: SteadfastDeliveryStatus;
+      if (shipment.consignmentId) {
+        newStatus = await statusByConsignmentId(shipment.consignmentId);
+      } else if (shipment.trackingCode) {
+        newStatus = await statusByTrackingCode(shipment.trackingCode);
+      } else if (shipment.invoice) {
+        newStatus = await statusByInvoice(shipment.invoice);
+      } else {
+        // Shouldn't happen for SUCCESS bookings, but skip defensively.
+        summary.failed += 1;
+        summary.results.push({
+          shipmentId: String(shipment._id),
+          previousStatus: previous,
+          error: "No identifier to query",
+        });
+        continue;
+      }
+
+      const changed = newStatus !== previous;
+      shipment.deliveryStatus = newStatus;
+      shipment.lastDeliveryStatusSyncedAt = new Date();
+      shipment.lastDeliveryStatusSyncError = null;
+      await shipment.save();
+
+      await CourierStatusEvent.create({
+        shipmentId: shipment._id,
+        consignmentId: shipment.consignmentId,
+        previousStatus: previous,
+        newStatus,
+        isTransition: changed,
+        source: "API_POLL",
+        note: "Bulk pending sync",
+        createdBy: actor,
+      });
+
+      if (changed) summary.changed += 1;
+      else summary.unchanged += 1;
+      summary.results.push({ shipmentId: String(shipment._id), previousStatus: previous, newStatus });
+    } catch (error) {
+      summary.failed += 1;
+      const message = (error as Error).message.slice(0, 500);
+      shipment.lastDeliveryStatusSyncError = message;
+      shipment.lastDeliveryStatusSyncedAt = new Date();
+      await shipment.save();
+      await CourierStatusEvent.create({
+        shipmentId: shipment._id,
+        consignmentId: shipment.consignmentId,
+        previousStatus: previous,
+        newStatus: previous,
+        isTransition: false,
+        source: "API_POLL",
+        syncError: message,
+        createdBy: actor,
+      });
+      summary.results.push({ shipmentId: String(shipment._id), previousStatus: previous, error: message });
+    }
+  }
+
+  await logActivity(req, {
+    action: "COURIER_BULK_SYNC_RUN",
+    newValue: {
+      requested: summary.requested,
+      processed: summary.processed,
+      changed: summary.changed,
+      failed: summary.failed,
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    message: `Synced ${summary.processed} shipment(s): ${summary.changed} changed, ${summary.unchanged} unchanged, ${summary.failed} failed`,
+    data: summary,
+  });
+};
+
+// --------------------------------------------------------------------------
 // POST /api/admin/courier/shipments/:id/cancel-request — record intent
 // --------------------------------------------------------------------------
 // Steadfast's documented public API has no cancellation endpoint. We RECORD
@@ -601,10 +762,8 @@ export const inspectReturn = async (req: Request, res: Response) => {
         throw new AppError(`items[${index}].${name} must be a non-negative whole number`, 400);
       }
     });
-    if (sellable + damaged + missing !== received + Math.max(0, expected - received)) {
-      // Totals need not line up perfectly (over-receive counts as sellable + damaged),
-      // but we warn when inconsistent.
-    }
+    // Totals need not line up perfectly (over-receive counts as sellable + damaged),
+    // so we accept any admin-reconciled numbers that are individually non-negative.
     return {
       productId: r.productId ? new mongoose.Types.ObjectId(String(r.productId)) : null,
       productTitle: String(r.productTitle),

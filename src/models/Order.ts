@@ -115,9 +115,12 @@ const orderSchema = new Schema<IOrder>(
     shippingName: { type: String, required: true, trim: true },
     shippingPhone: { type: String, required: true, trim: true },
     shippingEmail: { type: String, trim: true, lowercase: true, default: null },
-    shippingAddress: { type: String, required: true, trim: true },
-    shippingCity: { type: String, required: true, trim: true },
-    shippingArea: { type: String, required: true, trim: true },
+    // Optional on purpose: STORE_PICKUP orders have no shipping address (the
+    // customer collects from the store). DELIVERY orders have these filled
+    // in by parseShippingInfo. Default "" keeps the Order shape consistent.
+    shippingAddress: { type: String, default: "", trim: true },
+    shippingCity: { type: String, default: "", trim: true },
+    shippingArea: { type: String, default: "", trim: true },
     orderNotes: { type: String, trim: true, default: "" },
     cancelledAt: { type: Date, default: null },
     cancellationReason: { type: String, default: null, trim: true, maxlength: 500 },

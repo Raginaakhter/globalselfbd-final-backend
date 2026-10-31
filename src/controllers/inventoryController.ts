@@ -108,24 +108,46 @@ const toInventoryRow = (p: InventoryRow, cogs: number) => {
   };
 };
 
-// FIFO-COGS for a product = sum over lots of (receivedQuantity - remainingQuantity) * landedUnitCost.
-// Returned per product id as a Map for fast join into table rows.
+// True COGS per product = sum over SALE stock-movements of (quantity * unitCost),
+// plus a productCost-based estimate for any `soldQuantity` not covered by SALE
+// movements. The second term matters because:
+//   - `backfillSoldTotals` seeds historical `soldQuantity` directly from past
+//     orders WITHOUT creating StockMovement SALE rows — those sales are real
+//     but invisible to the SALE aggregation.
+//   - A legacy product sold before FIFO lots were introduced will still have
+//     `soldQuantity > 0` with no movement history.
+// For sales that DO go through `finalizeSale`, each unit's cost (lot or
+// product.productCost fallback) is already in the movement, so no double count.
 const cogsByProductIds = async (productIds: mongoose.Types.ObjectId[]): Promise<Map<string, number>> => {
   if (productIds.length === 0) return new Map();
-  const rows = await InventoryLot.aggregate([
-    { $match: { productId: { $in: productIds } } },
-    {
-      $group: {
-        _id: "$productId",
-        cogs: {
-          $sum: {
-            $multiply: [{ $subtract: ["$receivedQuantity", "$remainingQuantity"] }, "$landedUnitCost"],
-          },
+
+  const [movementRows, products] = await Promise.all([
+    StockMovement.aggregate<{ _id: mongoose.Types.ObjectId; cogs: number; qty: number }>([
+      { $match: { productId: { $in: productIds }, type: "SALE" } },
+      {
+        $group: {
+          _id: "$productId",
+          cogs: { $sum: { $multiply: ["$quantity", "$unitCost"] } },
+          qty: { $sum: "$quantity" },
         },
       },
-    },
+    ]),
+    Product.find({ _id: { $in: productIds } })
+      .select("_id soldQuantity productCost")
+      .lean(),
   ]);
-  return new Map(rows.map((r) => [String(r._id), roundMoney(r.cogs || 0)]));
+
+  const movementByProduct = new Map(movementRows.map((r) => [String(r._id), r]));
+  const result = new Map<string, number>();
+  for (const p of products) {
+    const movement = movementByProduct.get(String(p._id));
+    const movementCogs = movement?.cogs || 0;
+    const coveredQty = movement?.qty || 0;
+    const uncoveredQty = Math.max(0, (p.soldQuantity || 0) - coveredQty);
+    const fallbackCogs = uncoveredQty * (p.productCost || 0);
+    result.set(String(p._id), roundMoney(movementCogs + fallbackCogs));
+  }
+  return result;
 };
 
 // @desc    Inventory dashboard cards (totals across all products)
@@ -212,19 +234,30 @@ export const getInventorySummary = async (req: Request, res: Response) => {
     manualPreOrder: 0,
   };
 
-  const cogsAgg = await InventoryLot.aggregate([
-    {
-      $group: {
-        _id: null,
-        cogs: {
-          $sum: {
-            $multiply: [{ $subtract: ["$receivedQuantity", "$remainingQuantity"] }, "$landedUnitCost"],
-          },
-        },
-      },
-    },
+  // Sitewide COGS = sum of SALE movement cost + productCost estimate for the
+  // soldQuantity not yet covered by SALE movements. Matches the per-product
+  // hybrid in cogsByProductIds — see the comment there for the two sources.
+  const [movementAgg, uncoveredAgg] = await Promise.all([
+    StockMovement.aggregate<{ cogs: number }>([
+      { $match: { type: "SALE" } },
+      { $group: { _id: null, cogs: { $sum: { $multiply: ["$quantity", "$unitCost"] } } } },
+    ]),
+    StockMovement.aggregate<{ _id: mongoose.Types.ObjectId; qty: number }>([
+      { $match: { type: "SALE" } },
+      { $group: { _id: "$productId", qty: { $sum: "$quantity" } } },
+    ]),
   ]);
-  const cogs = roundMoney(cogsAgg[0]?.cogs || 0);
+  const coveredByProduct = new Map(uncoveredAgg.map((r) => [String(r._id), r.qty]));
+  const allProducts = await Product.find({ soldQuantity: { $gt: 0 } })
+    .select("_id soldQuantity productCost")
+    .lean();
+  let fallbackCogs = 0;
+  for (const p of allProducts) {
+    const covered = coveredByProduct.get(String(p._id)) || 0;
+    const uncovered = Math.max(0, (p.soldQuantity || 0) - covered);
+    fallbackCogs += uncovered * (p.productCost || 0);
+  }
+  const cogs = roundMoney((movementAgg[0]?.cogs || 0) + fallbackCogs);
   const revenue = roundMoney(summary.totalRevenue || 0);
   const grossProfit = roundMoney(revenue - cogs);
   const profitMargin = revenue > 0 ? Math.round((grossProfit / revenue) * 10000) / 100 : 0;

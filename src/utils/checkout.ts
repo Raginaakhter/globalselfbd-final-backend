@@ -397,11 +397,6 @@ export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingI
   const email = text(body.email, "Email", { required: false, max: 100 });
   if (email && !EMAIL_REGEX.test(email)) throw new AppError("Please provide a valid email", 400);
 
-  const shippingAddress = text(body.shippingAddress, "Shipping address", { required: true, max: 300 });
-  const city = text(body.city, "City", { required: true, max: 60 });
-  const area = text(body.area, "Area", { required: true, max: 60 });
-  const orderNotes = text(body.orderNotes, "Order notes", { required: false, max: 500 });
-
   if (!isPaymentMethod(body.paymentMethod)) {
     throw new AppError(`Payment method is required. Allowed: ${PAYMENT_METHODS.join(", ")}`, 400);
   }
@@ -416,6 +411,16 @@ export const parseShippingInfo = (body: Record<string, unknown> = {}): ShippingI
       : (() => {
           throw new AppError(`fulfillmentMethod must be one of: ${FULFILLMENT_METHODS.join(", ")}`, 400);
         })();
+
+  // Store pickup orders don't need a shipping address — the customer collects
+  // the parcel from the store themselves. Fields are stored as empty strings
+  // so the Order shape stays consistent and admin UIs can detect pickup by
+  // fulfillmentMethod rather than checking for empty address.
+  const addressRequired = fulfillmentMethod !== "STORE_PICKUP";
+  const shippingAddress = text(body.shippingAddress, "Shipping address", { required: addressRequired, max: 300 });
+  const city = text(body.city, "City", { required: addressRequired, max: 60 });
+  const area = text(body.area, "Area", { required: addressRequired, max: 60 });
+  const orderNotes = text(body.orderNotes, "Order notes", { required: false, max: 500 });
 
   return {
     customerName,

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Product from "../models/Product";
 import OrderItem from "../models/OrderItem";
 import Order from "../models/Order";
+import StockMovement from "../models/StockMovement";
 import { slugify } from "../utils/slugify";
 
 // Idempotent one-shot backfill for products that existed before the inventory
@@ -201,8 +202,136 @@ const backfillSoldTotals = async (): Promise<void> => {
   await BackfillLog.insertOne({ _id: "soldTotals", completedAt: new Date() });
 };
 
+// Create missing SALE stock-movements for every historical DELIVERED/SHIPPED
+// order item that pre-dates the inventory system. Without these, PnL and
+// inventory COGS reports both aggregate off StockMovement SALE events and
+// return 0 for every pre-upgrade sale — the sale happened (soldQuantity was
+// backfilled) but no movement row exists to attribute the cost to.
+//
+// Idempotent in two ways:
+//   1. A BackfillLog row (`saleMovements`) short-circuits a second run.
+//   2. Per-order existence check — if an order already has ANY SALE movements
+//      for a given product, we assume that order was processed through the
+//      normal finalizeSale path and skip it. Only pure-gap orders get rows.
+//
+// unitCost uses the product's current productCost, which is the best estimate
+// available for historical cost — admins who paid attention set this at upload.
+// Products with productCost=0 get movements with unitCost=0, which is the same
+// outcome as before this backfill (so no regression, just honest zeros).
+const backfillSaleMovements = async (): Promise<void> => {
+  const existing = await BackfillLog.findOne({ _id: "saleMovements" });
+  if (existing) return;
+
+  const settledOrders = await Order.find({
+    orderStatus: { $in: ["SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"] },
+  })
+    .select("_id customerId deliveredAt createdAt")
+    .lean();
+  if (settledOrders.length === 0) {
+    await BackfillLog.insertOne({ _id: "saleMovements", completedAt: new Date() });
+    return;
+  }
+
+  const orderIds = settledOrders.map((o) => o._id);
+
+  // One query to find which (order, product) pairs already have SALE movements.
+  const existingPairs = await StockMovement.aggregate<{ _id: { orderId: mongoose.Types.ObjectId; productId: mongoose.Types.ObjectId } }>([
+    { $match: { orderId: { $in: orderIds }, type: "SALE" } },
+    { $group: { _id: { orderId: "$orderId", productId: "$productId" } } },
+  ]);
+  const covered = new Set(
+    existingPairs.map((r) => `${String(r._id.orderId)}:${String(r._id.productId)}`)
+  );
+
+  const items = await OrderItem.find({ orderId: { $in: orderIds }, isPreOrder: { $ne: true } }).lean();
+  if (items.length === 0) {
+    await BackfillLog.insertOne({ _id: "saleMovements", completedAt: new Date() });
+    return;
+  }
+
+  // Load every product referenced (direct + combo members) so we can read productCost.
+  const productIds = new Set<string>();
+  for (const item of items) {
+    if (item.productId) productIds.add(String(item.productId));
+    for (const member of item.comboItemsSnapshot || []) {
+      if (member.productId) productIds.add(String(member.productId));
+    }
+  }
+  const products = await Product.find({ _id: { $in: [...productIds] } })
+    .select("_id productCost stock")
+    .lean();
+  const costOf = new Map(products.map((p) => [String(p._id), p.productCost || 0]));
+  const stockOf = new Map(products.map((p) => [String(p._id), p.stock || 0]));
+
+  const orderDateOf = new Map(
+    settledOrders.map((o) => [String(o._id), o.deliveredAt || o.createdAt])
+  );
+
+  // Build one SALE movement per (orderItem, productId) gap. For combo lines
+  // the OrderItem contributes one movement per member product.
+  type MovementInsert = {
+    productId: mongoose.Types.ObjectId;
+    lotId: null;
+    shipmentId: null;
+    orderId: mongoose.Types.ObjectId;
+    type: "SALE";
+    quantity: number;
+    previousStock: number;
+    newStock: number;
+    unitCost: number;
+    reason: string;
+    createdBy: null;
+    createdAt: Date;
+  };
+  const inserts: MovementInsert[] = [];
+
+  for (const item of items) {
+    const orderId = item.orderId;
+    const when = orderDateOf.get(String(orderId)) || new Date();
+
+    const pushMovement = (productId: mongoose.Types.ObjectId, qty: number): void => {
+      const key = `${String(orderId)}:${String(productId)}`;
+      if (covered.has(key)) return;
+      const stock = stockOf.get(String(productId)) || 0;
+      inserts.push({
+        productId,
+        lotId: null,
+        shipmentId: null,
+        orderId,
+        type: "SALE",
+        quantity: qty,
+        previousStock: stock + qty, // best-effort reconstruction; audit only
+        newStock: stock,
+        unitCost: costOf.get(String(productId)) || 0,
+        reason: "Backfill: historical sale pre-dating inventory system",
+        createdBy: null,
+        createdAt: when,
+      });
+      covered.add(key); // dedupe within this run too
+    };
+
+    if (item.productId) {
+      pushMovement(item.productId, item.quantity);
+    } else {
+      // Combo line — one SALE per member product, qty = memberQty * lineQty
+      for (const member of item.comboItemsSnapshot || []) {
+        pushMovement(member.productId, member.quantity * item.quantity);
+      }
+    }
+  }
+
+  if (inserts.length > 0) {
+    // insertMany with ordered:false so one bad row never blocks the batch.
+    await StockMovement.insertMany(inserts, { ordered: false });
+    console.log(`📊 Backfilled ${inserts.length} SALE stock-movements for historical orders`);
+  }
+
+  await BackfillLog.insertOne({ _id: "saleMovements", completedAt: new Date() });
+};
+
 export const runInventoryBackfill = async (): Promise<void> => {
   await normalizeShape();
   await autoGenerateSkus();
   await backfillSoldTotals();
+  await backfillSaleMovements();
 };

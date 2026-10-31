@@ -12,7 +12,7 @@ import {
   escapeRegex,
   queryString,
 } from "../utils/validators";
-import { loadCategoryMap, getAncestry, buildPath, type CategoryMap, type CategoryRecord } from "../utils/categoryTree";
+import { loadCategoryMap, getAncestry, buildPath, invalidateCategoryCache, type CategoryMap, type CategoryRecord } from "../utils/categoryTree";
 import { LIMITS } from "../config/productOptions";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
@@ -163,6 +163,7 @@ export const createCategory = async (req: Request, res: Response) => {
     description: (description as string) || "",
     status,
   });
+  invalidateCategoryCache();
 
   const map = await loadCategoryMap();
   res.status(201).json({
@@ -285,6 +286,7 @@ export const updateCategory = async (req: Request, res: Response) => {
   }
 
   await category.save();
+  invalidateCategoryCache();
 
   const map = await loadCategoryMap();
   const counts = {
@@ -313,6 +315,7 @@ export const updateCategoryStatus = async (req: Request, res: Response) => {
 
   category.status = status;
   await category.save();
+  invalidateCategoryCache();
 
   // Same shape as the other category responses (path, parent, counts)
   const map = await loadCategoryMap();
@@ -342,6 +345,7 @@ export const deleteCategory = async (req: Request, res: Response) => {
   }
 
   await category.deleteOne();
+  invalidateCategoryCache();
 
   res.status(200).json({
     success: true,
