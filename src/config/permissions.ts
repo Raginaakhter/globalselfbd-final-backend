@@ -47,6 +47,10 @@ const PERMISSION_GROUPS: Record<string, string[]> = {
   settings: ["view", "update"],
   profile: ["view", "update"],
   wishlist: ["manage"],
+  // Analytics: `view` is the broad dashboard permission; `export` is split
+  // off because CSV exports expose raw rows and should be grantable
+  // separately from the dashboard view.
+  analytics: ["view", "export"],
 };
 
 const PERMISSIONS = Object.entries(PERMISSION_GROUPS).flatMap(
@@ -125,6 +129,7 @@ const DEFAULT_ROLES: DefaultRole[] = [
       "courier.cancel",
       "courier.returnRequest",
       "courier.returnReceive",
+      "analytics.view",
     ]),
   },
   {
