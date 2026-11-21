@@ -229,12 +229,16 @@ export const getPages = async (req: Request, res: Response) => {
   // Entry / exit pages count from the Session collection (fast; already
   // denormalized onto each session).
   const paths = (result?.items || []).map((i) => i.pagePath);
+  // Both entries and exits join on pagePath (short form). Previously exits
+  // grouped on exitPage (full URL) which never matched any pagePath row and
+  // reported 0 exits for everything. The new exitPagePath field keeps the
+  // comparison apples-to-apples.
   const entryExit = paths.length
     ? await AnalyticsSession.aggregate<{ _id: string; entries: number; exits: number }>([
         {
           $match: {
             sessionStart: { $gte: from, $lte: to },
-            $or: [{ entryPagePath: { $in: paths } }, { exitPage: { $in: paths } }],
+            $or: [{ entryPagePath: { $in: paths } }, { exitPagePath: { $in: paths } }],
           },
         },
         {
@@ -244,7 +248,8 @@ export const getPages = async (req: Request, res: Response) => {
               { $group: { _id: "$entryPagePath", entries: { $sum: 1 } } },
             ],
             exits: [
-              { $group: { _id: "$exitPage", exits: { $sum: 1 } } },
+              { $match: { exitPagePath: { $in: paths } } },
+              { $group: { _id: "$exitPagePath", exits: { $sum: 1 } } },
             ],
           },
         },

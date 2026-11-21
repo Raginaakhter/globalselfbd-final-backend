@@ -13,6 +13,7 @@ import {
   buildDedupeKey,
   categoryFor,
   DEDUPE_WINDOW_MS,
+  extractPath,
   isAnalyticsEventName,
   optionalObjectId,
   sanitizeMetadata,
@@ -133,9 +134,47 @@ async function touchSession(
   userId: ReturnType<typeof optionalObjectId>,
   pageViewDelta: number,
   eventDelta: number,
-  options: { willBounce?: boolean } = {}
+  options: { willBounce?: boolean; resurrect?: boolean } = {}
 ): Promise<boolean> {
   const now = new Date();
+  // Resurrect semantics: when `sendBeacon` fires /session/end on a page
+  // navigation that turns out to be a round-trip (payment gateway redirect,
+  // soft page reload, a fast back-forward cache restore), the client's
+  // sessionStorage still holds the same sessionId and a follow-up event
+  // arrives against a server-side session that has sessionEnd set and
+  // isActive=false. Treating that as a brand-new session discards the
+  // original sessionStart (duration restarts, first-touch attribution is
+  // lost). Reopening the same row keeps the original start, so duration
+  // measures the whole visit. Called with resurrect=true from paths that
+  // are an explicit "user is here" signal: /session/start and /events.
+  // Heartbeats never resurrect — a backgrounded tab must not keep an ended
+  // session alive.
+  const setFields: Record<string, unknown> = {
+    lastActivity: now,
+    currentPage: ctx.pageUrl || undefined,
+    exitPage: ctx.pageUrl || undefined,
+    exitPagePath: ctx.pagePath || undefined,
+    deviceType: ctx.deviceType,
+    browser: ctx.browser,
+    operatingSystem: ctx.operatingSystem,
+    country: ctx.country,
+    city: ctx.city,
+    ...(userId ? { userId } : {}),
+    // Any engagement beyond a single page_view ends the bounce classification.
+    ...(options.willBounce === false ? { isBounce: false } : {}),
+  };
+  if (options.resurrect) {
+    setFields.sessionEnd = null;
+    setFields.isActive = true;
+    // `duration` is left stale; endSession recomputes it from sessionStart
+    // whenever the session is next closed.
+  }
+
+  // Note: `isActive` lives ONLY in $set here (when resurrect: true) or
+  // falls back to the schema default (also true) on insert. Keeping it in
+  // both $setOnInsert and $set triggers MongoDB's path-conflict error and
+  // the whole update is rejected — which would silently 500 every event
+  // ingestion. The schema default handles the insert case.
   const update = {
     $setOnInsert: {
       sessionId,
@@ -148,21 +187,8 @@ async function touchSession(
       utmMedium: ctx.utmMedium,
       utmCampaign: ctx.utmCampaign,
       referrer: ctx.referrer,
-      isActive: true,
     },
-    $set: {
-      lastActivity: now,
-      currentPage: ctx.pageUrl || undefined,
-      exitPage: ctx.pageUrl || undefined,
-      deviceType: ctx.deviceType,
-      browser: ctx.browser,
-      operatingSystem: ctx.operatingSystem,
-      country: ctx.country,
-      city: ctx.city,
-      ...(userId ? { userId } : {}),
-      // Any engagement beyond a single page_view ends the bounce classification.
-      ...(options.willBounce === false ? { isBounce: false } : {}),
-    },
+    $set: setFields,
     $inc: {
       pageViews: pageViewDelta,
       totalEvents: eventDelta,
@@ -272,6 +298,10 @@ export const ingestEvents = async (req: Request, res: Response) => {
       touchVisitor(visitorId, ctx, userId, pageViewDelta, 1),
       touchSession(sessionId, visitorId, ctx, userId, pageViewDelta, 1, {
         willBounce: bounceReset ? false : undefined,
+        // An incoming event is unambiguous proof the user is active, so an
+        // event against an ended session reopens it instead of recording
+        // against a zombie row.
+        resurrect: true,
       }),
     ]);
 
@@ -338,14 +368,29 @@ export const heartbeat = async (req: Request, res: Response) => {
   const visitorId = assertVisitorId(body.visitorId);
   const sessionId = assertSessionId(body.sessionId);
 
+  // Must include visitorId in the select — without it the mismatch check
+  // below silently always passes (undefined), letting anyone with a session
+  // id refresh a stranger's session. Same for sessionEnd: an explicitly
+  // closed session must NOT be resurrected by a stale heartbeat still firing
+  // from a backgrounded tab.
   const existing = await AnalyticsSession.findOne({ sessionId })
-    .select("lastActivity sessionStart isActive")
+    .select("lastActivity sessionStart isActive visitorId sessionEnd")
     .lean();
   if (!existing) {
     throw new AppError("Unknown session — call /session/start first", 404);
   }
-  if (existing.visitorId && existing.visitorId !== visitorId) {
+  if (existing.visitorId !== visitorId) {
     throw new AppError("Session/visitor mismatch", 400);
+  }
+  if (existing.sessionEnd) {
+    // Idempotent no-op: the session has already been closed. Report 200 so
+    // the client doesn't flood retries, but skip the DB write entirely.
+    res.status(200).json({
+      success: true,
+      message: "Session already ended",
+      data: { idleMinutes: SESSION_IDLE_MINUTES, ended: true },
+    });
+    return;
   }
 
   // Coalesce: only persist if the previous activity was more than 15 seconds
@@ -358,12 +403,13 @@ export const heartbeat = async (req: Request, res: Response) => {
   );
   if (now.getTime() - new Date(existing.lastActivity).getTime() >= minGapMs) {
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.slice(0, 2048) : "";
+    const pagePath = pageUrl ? extractPath(pageUrl) : "";
     await AnalyticsSession.updateOne(
-      { sessionId },
+      { sessionId, sessionEnd: null },
       {
         $set: {
           lastActivity: now,
-          ...(pageUrl ? { currentPage: pageUrl, exitPage: pageUrl } : {}),
+          ...(pageUrl ? { currentPage: pageUrl, exitPage: pageUrl, exitPagePath: pagePath } : {}),
           isActive: true,
         },
       }
@@ -391,12 +437,15 @@ export const startSession = async (req: Request, res: Response) => {
 
   const [, isNew] = await Promise.all([
     touchVisitor(visitorId, ctx, userId, 0, 0),
-    touchSession(sessionId, visitorId, ctx, userId, 0, 0),
+    // Explicit /session/start is a strong "user is here" signal — on a round
+    // trip from a payment gateway or a page-reload after sendBeacon fired
+    // /session/end, reopen the existing row instead of leaving it ended.
+    touchSession(sessionId, visitorId, ctx, userId, 0, 0, { resurrect: true }),
   ]);
 
   res.status(200).json({
     success: true,
-    message: isNew ? "Session started" : "Session already active",
+    message: isNew ? "Session started" : "Session reopened",
     data: { sessionId, visitorId, isNew },
   });
 };
@@ -432,6 +481,7 @@ export const endSession = async (req: Request, res: Response) => {
     Math.round((end.getTime() - new Date(session.sessionStart).getTime()) / 1000)
   );
   const exitPage = typeof body.exitPage === "string" ? body.exitPage.slice(0, 2048) : "";
+  const exitPagePath = exitPage ? extractPath(exitPage) : "";
 
   await AnalyticsSession.updateOne(
     { sessionId },
@@ -440,7 +490,7 @@ export const endSession = async (req: Request, res: Response) => {
         sessionEnd: end,
         isActive: false,
         duration,
-        ...(exitPage ? { exitPage } : {}),
+        ...(exitPage ? { exitPage, exitPagePath } : {}),
       },
     }
   );

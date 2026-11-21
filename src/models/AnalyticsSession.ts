@@ -16,6 +16,10 @@ export interface IAnalyticsSession {
   entryPage: string;
   entryPagePath: string;
   exitPage: string;
+  // Short path form of exitPage (no querystring, no fragment) so page-level
+  // reports can join against AnalyticsEvent.pagePath cleanly. exitPage keeps
+  // the full URL for drill-downs and the admin UI.
+  exitPagePath: string;
   currentPage: string;
   pageViews: number;
   totalEvents: number;
@@ -49,8 +53,9 @@ const analyticsSessionSchema = new Schema<IAnalyticsSession>(
     visitorId: { type: String, required: true, index: true, trim: true, maxlength: 80 },
     userId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
     entryPage: { type: String, default: "", trim: true, maxlength: 2048 },
-    entryPagePath: { type: String, default: "", trim: true, maxlength: 512 },
+    entryPagePath: { type: String, default: "", trim: true, maxlength: 512, index: true },
     exitPage: { type: String, default: "", trim: true, maxlength: 2048 },
+    exitPagePath: { type: String, default: "", trim: true, maxlength: 512, index: true },
     currentPage: { type: String, default: "", trim: true, maxlength: 2048 },
     pageViews: { type: Number, default: 0, min: 0 },
     totalEvents: { type: Number, default: 0, min: 0 },
