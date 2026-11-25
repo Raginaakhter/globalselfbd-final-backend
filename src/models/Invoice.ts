@@ -76,9 +76,10 @@ const invoiceSchema = new Schema<IInvoice>(
     customerName: { type: String, required: true },
     customerPhone: { type: String, required: true },
     customerEmail: { type: String, default: null },
-    shippingAddress: { type: String, required: true },
-    shippingArea: { type: String, required: true },
-    shippingCity: { type: String, required: true },
+    // Empty for STORE_PICKUP orders (no delivery address), so these are not required
+    shippingAddress: { type: String, default: "" },
+    shippingArea: { type: String, default: "" },
+    shippingCity: { type: String, default: "" },
     items: { type: [invoiceItemSchema], default: [] },
     subtotal: { type: Number, required: true, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
