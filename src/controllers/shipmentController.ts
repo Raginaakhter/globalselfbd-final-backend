@@ -7,7 +7,7 @@ import InventoryLot from "../models/InventoryLot";
 import { nextSequence } from "../models/Counter";
 import AppError from "../utils/AppError";
 import { logActivity } from "../utils/activityLog";
-import { recordMovement } from "../utils/inventory";
+import { recordMovement, syncPreOrderState } from "../utils/inventory";
 import { assertObjectId, escapeRegex, getPagination, queryString } from "../utils/validators";
 import { getAuthUser } from "../middleware/auth";
 
@@ -437,6 +437,8 @@ export const receiveShipment = async (req: Request, res: Response) => {
           },
           session
         );
+        // New units in → a pre-order product becomes a regular in-stock product.
+        await syncPreOrderState(item.productId, session);
 
         item.receivedQuantity += qty;
       }
@@ -540,6 +542,7 @@ export const deleteShipment = async (req: Request, res: Response) => {
           },
           session
         );
+        await syncPreOrderState(lot.productId, session);
       }
       await InventoryLot.updateMany(
         { shipmentId: shipment._id },

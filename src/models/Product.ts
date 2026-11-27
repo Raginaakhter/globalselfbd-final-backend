@@ -3,6 +3,9 @@ import { SIZES, UNITS, STATUSES, LIMITS, type Size, type Unit } from "../config/
 import { PRE_ORDER } from "../config/orderOptions";
 import type { Status } from "../types/common";
 
+export const PRE_ORDER_SOURCES = ["MANUAL", "AUTO", "DISABLED"] as const;
+export type PreOrderSource = (typeof PRE_ORDER_SOURCES)[number];
+
 export interface IProduct {
   productTitle: string;
   slug: string;
@@ -43,15 +46,20 @@ export interface IProduct {
   // From APPROVED reviews only; kept up to date when a review is approved/hidden/deleted
   ratingAverage: number;
   ratingCount: number;
-  // Pre-order: when true, this product takes orders even without stock; the admin
-  // promises delivery in at least `preOrderMinDays` days (floor: PRE_ORDER.MIN_DELIVERY_DAYS).
+  // Pre-order mode RIGHT NOW: when true, this product takes orders without stock and
+  // the admin promises delivery in at least `preOrderMinDays` days (floor:
+  // PRE_ORDER.MIN_DELIVERY_DAYS). Backend-managed: syncPreOrderState sets it from
+  // available stock (stock - reserved) and the product's pre-order policy below.
   isPreOrder: boolean;
+  // Delivery window. Kept for MANUAL products even while they are in stock, so the
+  // admin's setting comes back on the next stock-out.
   preOrderMinDays: number;
-  // How isPreOrder was set:
-  //   "MANUAL" — admin flipped it from the product editor; never clobbered automatically.
-  //   "AUTO"   — the system turned it on when stock dropped to 0; auto-cleared on restock.
-  //   null     — not a pre-order product.
-  preOrderSource: "MANUAL" | "AUTO" | null;
+  // Pre-order policy (whether this product may sell as pre-order when out of stock):
+  //   "MANUAL"   — admin enabled pre-order for this product. Pre-order whenever available = 0.
+  //   "AUTO"     — the site-wide auto rule put it in pre-order mode; cleared to null on restock.
+  //   "DISABLED" — admin turned pre-order off; shows Out of Stock at 0, the site rule never applies.
+  //   null       — no product-level choice; follows the site-wide autoEnableOnStockOut setting.
+  preOrderSource: PreOrderSource | null;
   // Admin override: ship this product for free (waive the per-city delivery
   // charge in checkout when the whole cart is free-delivery). System rule:
   // discounted products — customerSpecialPrice set below customerSellPrice —
@@ -191,7 +199,7 @@ const productSchema = new Schema<IProduct>(
     },
     preOrderSource: {
       type: String,
-      enum: { values: ["MANUAL", "AUTO", null], message: "preOrderSource must be MANUAL or AUTO" },
+      enum: { values: [...PRE_ORDER_SOURCES, null], message: "preOrderSource must be MANUAL, AUTO or DISABLED" },
       default: null,
     },
     freeDelivery: { type: Boolean, default: false, index: true },

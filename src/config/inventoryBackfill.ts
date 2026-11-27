@@ -4,6 +4,7 @@ import OrderItem from "../models/OrderItem";
 import Order from "../models/Order";
 import StockMovement from "../models/StockMovement";
 import { slugify } from "../utils/slugify";
+import { reconcileAllPreOrderStates } from "../utils/inventory";
 
 // Idempotent one-shot backfill for products that existed before the inventory
 // system was added. Runs on every startup; each step is a no-op once satisfied,
@@ -334,4 +335,8 @@ export const runInventoryBackfill = async (): Promise<void> => {
   await autoGenerateSkus();
   await backfillSoldTotals();
   await backfillSaleMovements();
+  // Every stock change syncs pre-order on its own; this fixes rows written before
+  // that existed (e.g. a pre-order product that already has stock). Idempotent.
+  const synced = await reconcileAllPreOrderStates();
+  if (synced > 0) console.log(`🔄 Synced pre-order status with available stock on ${synced} product(s)`);
 };

@@ -22,8 +22,13 @@ export interface IOrderItem {
   unitPrice: number;
   subtotal: number;
   // True on a product line when the product was pre-order at checkout time.
-  // Snapshotted so cancellation knows to skip stock restore for this line.
+  // Pre-order lines reserve nothing at checkout.
   isPreOrder: boolean;
+  // Pre-order lines only: when arriving stock was reserved for this line (waiting
+  // pre-orders are served oldest-first before new customers can buy). From then on
+  // the line holds a reservation like a regular line: cancel releases it, delivery
+  // deducts stock. null = still waiting for stock.
+  stockReservedAt: Date | null;
   // For combo lines only: the member products at purchase time
   comboItemsSnapshot: ComboItemSnapshotEntry[];
   createdAt: Date;
@@ -43,6 +48,7 @@ const orderItemSchema = new Schema<IOrderItem>(
     unitPrice: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
     isPreOrder: { type: Boolean, default: false },
+    stockReservedAt: { type: Date, default: null },
     comboItemsSnapshot: {
       type: [
         {

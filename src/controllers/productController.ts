@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import type { Request, Response } from "express";
 import Product, { type IProduct, type ProductDocument } from "../models/Product";
-import { recordMovement } from "../utils/inventory";
+import { recordMovement, syncPreOrderState } from "../utils/inventory";
+import { applyPreOrderChoice, getPreorderConfig, isPreOrderEligible } from "../utils/preorder";
 import Category from "../models/Category";
 import type { CategoryDocument } from "../models/Category";
 import OrderItem from "../models/OrderItem";
@@ -12,7 +13,9 @@ import { logActivity } from "../utils/activityLog";
 import { slugify, isValidSlug, uniqueSlug } from "../utils/slugify";
 import { isValidImageUrl } from "../utils/imageValidation";
 import {
+  availabilityFilter,
   getProductVisibility,
+  preOrderSourceFilter,
   toProductResponse,
   type ProductLike,
   type ProductVisibility,
@@ -35,7 +38,6 @@ import {
   SIZES,
   UNITS,
   STATUSES,
-  AVAILABILITY,
   LIMITS,
   type Size,
   type Unit,
@@ -206,11 +208,10 @@ const parseProductFields = (body: Body): ProductFields => {
     out.status = body.status;
   }
 
-  if (body.isPreOrder !== undefined) {
-    out.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
-    // Mark the source so the auto-stock-out sync never clobbers an admin's choice.
-    out.preOrderSource = out.isPreOrder ? "MANUAL" : null;
-  }
+  // The admin's pre-order switch: "may this product sell as pre-order when out of
+  // stock". Applied with applyPreOrderChoice; syncPreOrderState then sets the
+  // current mode (isPreOrder) from available stock.
+  if (body.isPreOrder !== undefined) out.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
   if (body.preOrderMinDays !== undefined) {
     if (isBlank(body.preOrderMinDays)) {
       out.preOrderMinDays = 0;
@@ -283,6 +284,8 @@ const validateProductRules = (p: RuleFields): void => {
   }
 
   // Pre-order: the business floor is 15 days; admins can go higher but never lower.
+  // `isPreOrder` here means "pre-order is enabled for this product". When it's off,
+  // applyPreOrderChoice clears the days.
   if (p.isPreOrder) {
     if (!p.preOrderMinDays || p.preOrderMinDays < PRE_ORDER.MIN_DELIVERY_DAYS) {
       throw new AppError(
@@ -290,10 +293,59 @@ const validateProductRules = (p: RuleFields): void => {
         400
       );
     }
-  } else {
-    // Keep the stored value clean when pre-order is off.
-    p.preOrderMinDays = 0;
   }
+};
+
+// Pre-order site config for admin responses (adds preOrderEnabled); customers don't need it.
+const preorderFor = async (visibility: ProductVisibility) =>
+  visibility.canSeeInactive ? await getPreorderConfig() : undefined;
+
+// Respond with the product as it is NOW (after syncPreOrderState may have changed it).
+const freshProductResponse = async (productId: mongoose.Types.ObjectId, req: Request) => {
+  const visibility = getProductVisibility(req.permissions);
+  const fresh = await findProductOr404(productId);
+  return toProductResponse(asProductLike(fresh), visibility, await preorderFor(visibility));
+};
+
+const lastAlertReset = (stock: number): Record<string, null> =>
+  stock > 0 ? { lastStockOutAlertAt: null, lastLowStockAlertAt: null } : {};
+
+// Set stock to an exact value from the product admin pages. Atomic: the write only
+// applies while reserved <= the new stock, so an order placed at the same moment
+// can't be left holding units that no longer exist. Audited + pre-order synced.
+const setStockExact = async (
+  productId: mongoose.Types.ObjectId | string,
+  value: number,
+  createdBy: mongoose.Types.ObjectId | null
+): Promise<void> => {
+  const before = await Product.findById(productId).select("stock reserved").lean();
+  if (!before) throw new AppError("Product not found", 404);
+  if (value === before.stock) return;
+  if (value < (before.reserved || 0)) {
+    throw new AppError(
+      `Stock cannot be lower than reserved (${before.reserved}). Cancel the pending orders first or set a higher value.`,
+      400
+    );
+  }
+  // Clear the stock-out AND low-stock alert flags on any positive stock set, so a later
+  // zero/low can alert again. (Setting stock to 0 directly does NOT trigger an alert —
+  // that path is reserved for sellouts; the admin saw the zero themselves.)
+  const updated = await Product.findOneAndUpdate(
+    { _id: productId, $expr: { $lte: [{ $ifNull: ["$reserved", 0] }, value] } },
+    { $set: { stock: value, ...lastAlertReset(value) } },
+    { returnDocument: "after", projection: { stock: 1 } }
+  );
+  if (!updated) throw new AppError("New orders reserved stock while saving. Please reload and try again.", 409);
+  await recordMovement({
+    productId,
+    type: "MANUAL_STOCK_UPDATE",
+    quantity: value - before.stock,
+    previousStock: before.stock,
+    newStock: updated.stock,
+    reason: "Stock changed from product admin page",
+    createdBy,
+  });
+  await syncPreOrderState(productId);
 };
 
 // Category must exist and be ACTIVE to be assigned
@@ -367,12 +419,8 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
   if (isNonEmptyString(search)) {
     filter.productTitle = new RegExp(escapeRegex(search.trim()), "i");
   }
-  if (availability) {
-    if (!(Object.values(AVAILABILITY) as string[]).includes(availability)) {
-      throw new AppError("availability must be IN_STOCK or OUT_OF_STOCK", 400);
-    }
-    filter.stock = availability === AVAILABILITY.IN_STOCK ? { $gt: 0 } : 0;
-  }
+  // Based on available stock (stock - reserved), the same number the cart checks.
+  if (availability) and.push(availabilityFilter(availability));
   if (isFabric !== undefined) filter.isFabric = toBoolean(isFabric, "isFabric");
   if (hasDiscount !== undefined) {
     const want = toBoolean(hasDiscount, "hasDiscount");
@@ -380,16 +428,7 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
   }
   // Pre-order filters so the website's pre-order page can list these products.
   if (isPreOrder !== undefined) filter.isPreOrder = toBoolean(isPreOrder, "isPreOrder");
-  if (preOrderSource) {
-    if (!["AUTO", "MANUAL", "NONE"].includes(preOrderSource)) {
-      throw new AppError("preOrderSource must be AUTO, MANUAL or NONE", 400);
-    }
-    if (preOrderSource === "NONE") {
-      and.push({ $or: [{ preOrderSource: null }, { preOrderSource: { $exists: false } }] });
-    } else {
-      filter.preOrderSource = preOrderSource;
-    }
-  }
+  if (preOrderSource) and.push(preOrderSourceFilter(preOrderSource));
   if (minPrice !== undefined || maxPrice !== undefined) {
     const range: Record<string, number> = {};
     if (minPrice !== undefined) range.$gte = toNumber(minPrice, "minPrice");
@@ -409,9 +448,10 @@ export const listProducts = async (req: Request, visibility: ProductVisibility) 
       .limit(limit),
     Product.countDocuments(filter),
   ]);
+  const preorder = await preorderFor(visibility);
 
   return {
-    data: products.map((p) => toProductResponse(asProductLike(p), visibility)),
+    data: products.map((p) => toProductResponse(asProductLike(p), visibility, preorder)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
 };
@@ -435,11 +475,24 @@ export const getProductOptions = async (req: Request, res: Response) => {
         .join(" > "),
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
+  const preorder = await getPreorderConfig();
 
   res.status(200).json({
     success: true,
     message: "Product options fetched successfully",
-    data: { categories, sizes: SIZES, units: UNITS, statuses: STATUSES },
+    data: {
+      categories,
+      sizes: SIZES,
+      units: UNITS,
+      statuses: STATUSES,
+      // So the product form can show the right default for the pre-order switch.
+      preOrder: {
+        autoEnableOnStockOut: preorder.autoEnableOnStockOut,
+        defaultPreOrderDays: preorder.defaultPreOrderDays,
+        minDeliveryDays: PRE_ORDER.MIN_DELIVERY_DAYS,
+        maxDeliveryDays: PRE_ORDER.MAX_DELIVERY_DAYS,
+      },
+    },
   });
 };
 
@@ -453,6 +506,7 @@ export const createProduct = async (req: Request, res: Response) => {
   }
 
   const fields = parseProductFields(body);
+  const preOrderChoice = fields.isPreOrder;
   const product = {
     productDescription: "",
     customerSpecialPrice: null,
@@ -464,9 +518,12 @@ export const createProduct = async (req: Request, res: Response) => {
     status: "ACTIVE" as const,
     isPreOrder: false,
     preOrderMinDays: 0,
+    preOrderSource: null,
     ...fields,
   } as ProductFields & RuleFields & { categoryId: string; productTitle: string };
   validateProductRules(product);
+  // No switch sent → no product-level choice; the site-wide auto rule decides.
+  if (preOrderChoice !== undefined) applyPreOrderChoice(product, preOrderChoice, await getPreorderConfig());
 
   await assertAssignableCategory(product.categoryId);
 
@@ -475,12 +532,13 @@ export const createProduct = async (req: Request, res: Response) => {
     : await uniqueSlug(Product, slugify(product.productTitle) || "product");
 
   const created = await Product.create(product);
-  const populated = await created.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
+  // Stock > 0 → sells normally; stock 0 + pre-order allowed → pre-order.
+  await syncPreOrderState(created._id);
 
   res.status(201).json({
     success: true,
     message: "Product created successfully",
-    data: toProductResponse(asProductLike(populated), getProductVisibility(req.permissions)),
+    data: await freshProductResponse(created._id, req),
   });
 };
 
@@ -520,7 +578,7 @@ export const getProduct = async (req: Request, res: Response) => {
   res.status(200).json({
     success: true,
     message: "Product fetched successfully",
-    data: toProductResponse(asProductLike(product), visibility),
+    data: toProductResponse(asProductLike(product), visibility, await preorderFor(visibility)),
   });
 };
 
@@ -531,10 +589,25 @@ export const updateProduct = async (req: Request, res: Response) => {
   const product = await findProductOr404(req.params.id);
   const body = (req.body || {}) as Body;
   const fields = parseProductFields(body);
+  const config = await getPreorderConfig();
 
   if (fields.stock !== undefined && fields.stock !== product.stock && !req.permissions?.has("inventory.update")) {
     throw new AppError("You do not have permission to change stock", 403);
   }
+  // Stock and the pre-order switch don't go through product.set(): stock is written
+  // atomically against `reserved` (setStockExact), and the switch sets the policy,
+  // not the current mode.
+  const newStock = fields.stock !== undefined && fields.stock !== product.stock ? fields.stock : undefined;
+  if (newStock !== undefined && newStock < (product.reserved || 0)) {
+    throw new AppError(
+      `Stock cannot be lower than reserved (${product.reserved}). Cancel the pending orders first or set a higher value.`,
+      400
+    );
+  }
+  const preOrderChoice = fields.isPreOrder;
+  delete fields.stock;
+  delete fields.isPreOrder;
+  delete fields.preOrderSource;
 
   const currentCategoryId = String(product.categoryId._id);
   if (fields.categoryId !== undefined && fields.categoryId !== currentCategoryId) {
@@ -543,8 +616,13 @@ export const updateProduct = async (req: Request, res: Response) => {
     delete fields.categoryId;
   }
 
-  // Validate the merged result before saving anything
-  const merged: RuleFields = { ...(product.toObject() as unknown as RuleFields), ...(fields as Partial<RuleFields>) };
+  // Validate the merged result before saving anything. For the pre-order rules,
+  // isPreOrder = "pre-order enabled after this save".
+  const merged: RuleFields = {
+    ...(product.toObject() as unknown as RuleFields),
+    ...(fields as Partial<RuleFields>),
+    isPreOrder: preOrderChoice ?? (product.preOrderSource === "MANUAL" || product.isPreOrder),
+  };
   validateProductRules(merged);
   fields.sizes = merged.sizes;
   // Pick up the discounted-override clamp (freeDelivery=false when a special
@@ -562,13 +640,15 @@ export const updateProduct = async (req: Request, res: Response) => {
   }
 
   product.set(fields);
+  if (preOrderChoice !== undefined) applyPreOrderChoice(product, preOrderChoice, config);
   await product.save();
-  const updated = await product.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
+  if (newStock !== undefined) await setStockExact(product._id, newStock, req.user?._id ?? null);
+  await syncPreOrderState(product._id);
 
   res.status(200).json({
     success: true,
     message: "Product updated successfully",
-    data: toProductResponse(asProductLike(updated), getProductVisibility(req.permissions)),
+    data: await freshProductResponse(product._id, req),
   });
 };
 
@@ -591,7 +671,7 @@ export const updateProductStatus = async (req: Request, res: Response) => {
   res.status(200).json({
     success: true,
     message: `Product ${status === "ACTIVE" ? "activated" : "deactivated"} successfully`,
-    data: toProductResponse(asProductLike(product), getProductVisibility(req.permissions)),
+    data: await freshProductResponse(product._id, req),
   });
 };
 
@@ -607,83 +687,54 @@ export const updateProductStock = async (req: Request, res: Response) => {
     throw new AppError('Send either "stock" (new value) or "adjustBy" (e.g. 10 or -3)', 400);
   }
 
-  let product: ProductDocument | null;
-  let movementType: "MANUAL_STOCK_UPDATE" | "ADJUSTMENT_IN" | "ADJUSTMENT_OUT" = "MANUAL_STOCK_UPDATE";
-  let previousStock = 0;
-  let movementQuantity = 0;
   if (stock !== undefined) {
     const value = toNumber(stock, "Stock");
     if (!Number.isInteger(value) || value < 0) throw new AppError("Stock must be a whole number of 0 or more", 400);
-    const before = await Product.findById(productId).select("stock reserved").lean();
-    if (!before) throw new AppError("Product not found", 404);
-    previousStock = before.stock;
-    movementQuantity = value - previousStock;
-    // Can't drop stock below the amount customers have already reserved: that
-    // would make the inventory oversell on the next DELIVERED transition.
-    if (value < (before.reserved || 0)) {
-      throw new AppError(
-        `Stock cannot be lower than reserved (${before.reserved}). Cancel the pending orders first or set a higher value.`,
-        400
-      );
-    }
-    // Clear the stock-out AND low-stock alert flags on any manual positive stock set,
-    // so a later zero/low can alert again. (Setting stock to 0 directly here does NOT
-    // trigger an alert — that path is reserved for sellouts; the admin saw the zero themselves.)
-    const update: Record<string, unknown> = { stock: value };
-    if (value > 0) {
-      update.lastStockOutAlertAt = null;
-      update.lastLowStockAlertAt = null;
-    }
-    product = await Product.findByIdAndUpdate(productId, update, { returnDocument: "after" });
+    await setStockExact(productId, value, req.user?._id ?? null);
   } else {
     const delta = toNumber(adjustBy, "adjustBy");
     if (!Number.isInteger(delta) || delta === 0) throw new AppError("adjustBy must be a non-zero whole number", 400);
-    movementType = delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT";
-    movementQuantity = delta;
-    const update: Record<string, unknown> = { $inc: { stock: delta } };
-    if (delta > 0) update.$set = { lastStockOutAlertAt: null, lastLowStockAlertAt: null };
     const before = await Product.findById(productId).select("stock reserved").lean();
-    previousStock = before?.stock ?? 0;
+    if (!before) throw new AppError("Product not found", 404);
     // Negative adjustment must leave at least `reserved` units in stock, otherwise
-    // in-flight orders could oversell when they finalize.
-    if (delta < 0 && (previousStock + delta) < (before?.reserved || 0)) {
+    // in-flight orders could oversell when they finalize. Checked here for a clear
+    // message, and again atomically in the update filter.
+    if (delta < 0 && before.stock + delta < (before.reserved || 0)) {
       throw new AppError(
-        `Stock cannot be lower than reserved (${before?.reserved ?? 0}).`,
+        before.stock + delta < 0 ? "Stock cannot go below 0" : `Stock cannot be lower than reserved (${before.reserved ?? 0}).`,
         400
       );
     }
-    product = await Product.findOneAndUpdate(
-      { _id: productId, stock: { $gte: delta < 0 ? -delta : 0 } },
-      update,
-      { returnDocument: "after" }
+    const updated = await Product.findOneAndUpdate(
+      {
+        _id: productId,
+        ...(delta < 0 ? { $expr: { $gte: [{ $add: ["$stock", delta] }, { $ifNull: ["$reserved", 0] }] } } : {}),
+      },
+      delta > 0 ? { $inc: { stock: delta }, $set: lastAlertReset(delta) } : { $inc: { stock: delta } },
+      { returnDocument: "after", projection: { stock: 1 } }
     );
-    if (!product && (await Product.exists({ _id: productId }))) {
-      throw new AppError("Stock cannot go below 0", 400);
-    }
-  }
-  if (!product) throw new AppError("Product not found", 404);
+    if (!updated) throw new AppError("New orders reserved stock while saving. Please reload and try again.", 409);
 
-  // Audit trail — every manual stock touch becomes a stock-movement row so the
-  // inventory movement report is consistent whether the admin used the product
-  // page or the inventory page.
-  if (movementQuantity !== 0) {
+    // Audit trail — every manual stock touch becomes a stock-movement row so the
+    // inventory movement report is consistent whether the admin used the product
+    // page or the inventory page.
     await recordMovement({
-      productId: product._id,
-      type: movementType,
-      quantity: movementQuantity,
-      previousStock,
-      newStock: product.stock,
+      productId: updated._id,
+      type: delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+      quantity: delta,
+      previousStock: updated.stock - delta,
+      newStock: updated.stock,
       reason: "Stock changed from product admin page",
       createdBy: req.user?._id ?? null,
     });
+    // Restock → regular product; sold out → pre-order (if allowed).
+    await syncPreOrderState(productId as string);
   }
-
-  const populated = await product.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
 
   res.status(200).json({
     success: true,
     message: "Stock updated successfully",
-    data: toProductResponse(asProductLike(populated), getProductVisibility(req.permissions)),
+    data: await freshProductResponse(new mongoose.Types.ObjectId(String(productId)), req),
   });
 };
 
@@ -711,7 +762,7 @@ export const updateProductGallery = async (req: Request, res: Response) => {
   res.status(200).json({
     success: true,
     message: "Gallery updated successfully",
-    data: toProductResponse(asProductLike(product), getProductVisibility(req.permissions)),
+    data: await freshProductResponse(product._id, req),
   });
 };
 
@@ -820,23 +871,28 @@ export const bulkRemoveDiscount = async (req: Request, res: Response) => {
 // @desc    Enable/disable pre-order on a product (and set its minimum delivery days).
 //          Admin-only quick toggle, separate from the general edit so dashboards can expose it
 //          as a dedicated switch. Enforces the 15-day business floor every time.
+//          "Enabled" means the product sells as pre-order whenever available stock is 0;
+//          while it has stock it sells as a regular product (synced automatically).
 // @route   PATCH /api/products/:id/pre-order
 // @access  products.update
 export const updateProductPreOrder = async (req: Request, res: Response) => {
   const product = await findProductOr404(req.params.id);
   const body = (req.body || {}) as Body;
+  const config = await getPreorderConfig();
 
   if (body.isPreOrder === undefined && body.preOrderMinDays === undefined) {
     throw new AppError("Send isPreOrder and/or preOrderMinDays", 400);
   }
 
-  const before = { isPreOrder: product.isPreOrder, preOrderMinDays: product.preOrderMinDays };
+  const before = {
+    isPreOrder: product.isPreOrder,
+    preOrderSource: product.preOrderSource ?? null,
+    preOrderMinDays: product.preOrderMinDays,
+  };
 
-  if (body.isPreOrder !== undefined) {
-    product.isPreOrder = toBoolean(body.isPreOrder, "isPreOrder");
-    // Admin explicitly set it — lock out the auto-stock-out sync for this product.
-    product.preOrderSource = product.isPreOrder ? "MANUAL" : null;
-  }
+  // Days-only edits keep the current policy.
+  const enabled =
+    body.isPreOrder !== undefined ? toBoolean(body.isPreOrder, "isPreOrder") : isPreOrderEligible(product.preOrderSource, config);
   if (body.preOrderMinDays !== undefined) {
     if (isBlank(body.preOrderMinDays)) {
       product.preOrderMinDays = 0;
@@ -852,28 +908,41 @@ export const updateProductPreOrder = async (req: Request, res: Response) => {
     }
   }
 
-  if (product.isPreOrder && product.preOrderMinDays < PRE_ORDER.MIN_DELIVERY_DAYS) {
+  if (enabled && product.preOrderMinDays < PRE_ORDER.MIN_DELIVERY_DAYS) {
     throw new AppError(
       `Pre-order minimum delivery days must be at least ${PRE_ORDER.MIN_DELIVERY_DAYS}`,
       400
     );
   }
-  if (!product.isPreOrder) product.preOrderMinDays = 0;
+  // Enabling (or editing the days of) a pre-order makes it the admin's own setting
+  // (MANUAL), so the chosen days are kept across restocks.
+  applyPreOrderChoice(product, enabled, config);
 
   await product.save();
+  await syncPreOrderState(product._id);
+  const after = await Product.findById(product._id).select("stock reserved isPreOrder preOrderSource preOrderMinDays").lean();
 
   await logActivity(req, {
     action: "PRODUCT_PRE_ORDER_UPDATED",
     oldValue: { productId: product._id, ...before },
-    newValue: { isPreOrder: product.isPreOrder, preOrderMinDays: product.preOrderMinDays },
+    newValue: {
+      isPreOrder: after?.isPreOrder ?? product.isPreOrder,
+      preOrderSource: after?.preOrderSource ?? null,
+      preOrderMinDays: after?.preOrderMinDays ?? product.preOrderMinDays,
+    },
   });
 
-  const populated = await product.populate<{ categoryId: CategoryRefDoc }>("categoryId", CATEGORY_FIELDS);
+  const available = after ? Math.max(0, (after.stock || 0) - (after.reserved || 0)) : 0;
+  const message = !enabled
+    ? "Pre-order disabled"
+    : after?.isPreOrder
+      ? "Pre-order enabled"
+      : `Pre-order enabled. ${available} unit(s) in stock, so it sells as a regular product and switches to pre-order automatically when stock runs out`;
 
   res.status(200).json({
     success: true,
-    message: `Pre-order ${product.isPreOrder ? "enabled" : "disabled"}`,
-    data: toProductResponse(asProductLike(populated), getProductVisibility(req.permissions)),
+    message,
+    data: await freshProductResponse(product._id, req),
   });
 };
 

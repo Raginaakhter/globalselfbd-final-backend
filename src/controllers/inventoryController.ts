@@ -13,12 +13,13 @@ import {
   recordMovement,
   returnToStock,
   returnDamaged,
-  syncAutoPreOrderState,
+  syncPreOrderState,
 } from "../utils/inventory";
 import { notifyLowStock, notifyStockOut, notifyStockRequest } from "../utils/adminAlerts";
 import { assertObjectId, escapeRegex, getPagination, queryString } from "../utils/validators";
 import { getAuthUser } from "../middleware/auth";
 import { getVisibleCategoryIds, getCategoryWithDescendants } from "../utils/categoryTree";
+import { preOrderSourceFilter } from "../utils/productView";
 
 type Body = Record<string, unknown>;
 
@@ -64,12 +65,18 @@ interface InventoryRow {
   lowStockThreshold?: number;
   status?: string;
   isPreOrder?: boolean;
+  preOrderSource?: string | null;
+  preOrderMinDays?: number;
   slug?: string;
   thumbnail?: string;
   _id?: unknown;
   createdAt?: Date;
   updatedAt?: Date;
 }
+
+// Customer-facing selling state, shown beside the stock-level badge.
+const availabilityStatusOf = (available: number, isPreOrder: boolean): "IN_STOCK" | "PRE_ORDER" | "OUT_OF_STOCK" =>
+  isPreOrder ? "PRE_ORDER" : available > 0 ? "IN_STOCK" : "OUT_OF_STOCK";
 
 const toInventoryRow = (p: InventoryRow, cogs: number) => {
   const stock = p.stock ?? 0;
@@ -98,7 +105,10 @@ const toInventoryRow = (p: InventoryRow, cogs: number) => {
     customerSpecialPrice: p.customerSpecialPrice ?? null,
     lowStockThreshold: p.lowStockThreshold ?? 0,
     stockStatus: stockStatusOf(available, p.lowStockThreshold ?? 0),
+    availabilityStatus: availabilityStatusOf(available, !!p.isPreOrder),
     isPreOrder: !!p.isPreOrder,
+    preOrderSource: p.preOrderSource ?? null,
+    preOrderMinDays: p.preOrderMinDays ?? 0,
     cogs,
     profit,
     margin,
@@ -205,14 +215,14 @@ export const getInventorySummary = async (req: Request, res: Response) => {
             $cond: [{ $lte: [{ $subtract: ["$stock", { $ifNull: ["$reserved", 0] }] }, 0] }, 1, 0],
           },
         },
-        // Products the system auto-switched to pre-order because they ran out
-        // of stock. Admin-set (MANUAL) pre-orders are counted separately so the
-        // dashboard tile reflects what the auto-switch actually did.
+        // Products selling as pre-order right now, split by why: the site-wide
+        // auto rule (AUTO) or the admin's per-product setting (MANUAL). MANUAL
+        // products that are back in stock are not counted.
         autoPreOrder: {
-          $sum: { $cond: [{ $eq: ["$preOrderSource", "AUTO"] }, 1, 0] },
+          $sum: { $cond: [{ $and: ["$isPreOrder", { $eq: ["$preOrderSource", "AUTO"] }] }, 1, 0] },
         },
         manualPreOrder: {
-          $sum: { $cond: [{ $eq: ["$preOrderSource", "MANUAL"] }, 1, 0] },
+          $sum: { $cond: [{ $and: ["$isPreOrder", { $eq: ["$preOrderSource", "MANUAL"] }] }, 1, 0] },
         },
       },
     },
@@ -356,16 +366,7 @@ export const listInventory = async (req: Request, res: Response) => {
   // Pre-order filters so the dashboard can show stock-out → auto-pre-order products.
   if (preOrder === "true") and.push({ isPreOrder: true });
   else if (preOrder === "false") and.push({ isPreOrder: false });
-  if (preOrderSource) {
-    if (!["AUTO", "MANUAL", "NONE"].includes(preOrderSource)) {
-      throw new AppError("preOrderSource must be AUTO, MANUAL or NONE", 400);
-    }
-    and.push(
-      preOrderSource === "NONE"
-        ? { $or: [{ preOrderSource: null }, { preOrderSource: { $exists: false } }] }
-        : { preOrderSource }
-    );
-  }
+  if (preOrderSource) and.push(preOrderSourceFilter(preOrderSource));
 
   if (and.length) filter.$and = and;
 
@@ -525,7 +526,7 @@ export const setProductStock = async (req: Request, res: Response) => {
         notifyLowStock(product._id);
       }
 
-      await syncAutoPreOrderState(product._id, session);
+      await syncPreOrderState(product._id, session);
 
       await logActivity(req, {
         action: "INVENTORY_STOCK_ADJUSTED",
@@ -609,7 +610,7 @@ export const adjustStock = async (req: Request, res: Response) => {
         notifyLowStock(product._id);
       }
 
-      await syncAutoPreOrderState(product._id, session);
+      await syncPreOrderState(product._id, session);
     });
   } finally {
     await session.endSession();
@@ -664,7 +665,7 @@ export const recordDamage = async (req: Request, res: Response) => {
 
       if (product.stock === 0) notifyStockOut(product._id);
 
-      await syncAutoPreOrderState(product._id, session);
+      await syncPreOrderState(product._id, session);
     });
   } finally {
     await session.endSession();

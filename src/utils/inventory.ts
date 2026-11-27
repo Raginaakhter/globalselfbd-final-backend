@@ -1,11 +1,13 @@
-import type { ClientSession, Types } from "mongoose";
-import Product, { type ProductDocument } from "../models/Product";
+import mongoose, { type ClientSession, type Types } from "mongoose";
+import Product, { type IProduct, type ProductDocument } from "../models/Product";
+import Order from "../models/Order";
+import OrderItem from "../models/OrderItem";
 import InventoryLot from "../models/InventoryLot";
 import StockMovement, { type MovementType } from "../models/StockMovement";
 import AppError from "./AppError";
 import { notifyStockOut, notifyLowStock } from "./adminAlerts";
-import { getPreorderConfig } from "./preorder";
-import { PRE_ORDER } from "../config/orderOptions";
+import { clampPreOrderDays, getPreorderConfig, isPreOrderEligible, type PreorderConfig } from "./preorder";
+import { PRE_ORDER, type OrderStatus } from "../config/orderOptions";
 
 type ProductRef = Types.ObjectId | string;
 
@@ -15,43 +17,254 @@ const roundMoney = (n: number): number => Math.round(n * 100) / 100;
 export const availableOf = (product: Pick<ProductDocument, "stock" | "reserved">): number =>
   Math.max(0, (product.stock || 0) - (product.reserved || 0));
 
-// Keep isPreOrder in sync with stock when the site has auto-pre-order enabled.
-// Called from every stock-mutating path so the admin never has to flip pre-order
-// manually on a stock-out. Idempotent: if the product is already in the desired
-// state (or admin-managed), it does nothing.
+// ---- Pre-order <-> regular sync ---------------------------------------------
 //
-//   stock == 0 + autoEnable + not currently pre-order  → enable (source=AUTO)
-//   stock >  0 + currently pre-order with source=AUTO  → disable (clear source)
-//   source == MANUAL                                   → never touched
-export const syncAutoPreOrderState = async (
+// The backend is the single source of truth for whether a product sells as
+// pre-order right now. Every path that changes `stock` or `reserved` calls
+// syncPreOrderState afterwards, so the switch happens automatically:
+//
+//   available > 0                         → regular product (isPreOrder=false).
+//                                           AUTO hands control back to the site rule
+//                                           (source=null); MANUAL keeps its delivery days.
+//   available = 0 + eligible              → pre-order (MANUAL stays MANUAL, else AUTO),
+//                                           using the stored days or the site default.
+//   available = 0 + not eligible          → Out of Stock (isPreOrder=false).
+//
+// "Available" is stock - reserved: units held by placed-but-undelivered orders are
+// already sold, so the last unit being ordered is what flips a product to pre-order.
+//
+// Waiting pre-orders are served first: before deciding, any available stock is
+// reserved for the product's unreserved pre-order lines, oldest order first (see
+// allocateToWaitingPreOrders). Only what is left sells to new customers, and while
+// any pre-order is still waiting the product stays in pre-order mode.
+
+type PreOrderFields = Pick<IProduct, "stock" | "reserved" | "isPreOrder" | "preOrderSource" | "preOrderMinDays">;
+type PreOrderUpdate = Partial<Pick<IProduct, "isPreOrder" | "preOrderSource" | "preOrderMinDays">>;
+
+const PRE_ORDER_SYNC_FIELDS = "stock reserved isPreOrder preOrderSource preOrderMinDays";
+const AVAILABLE_EXPR = { $subtract: ["$stock", { $ifNull: ["$reserved", 0] }] };
+
+// The state a product should be in, or null when it already is. `waitingPreOrders`
+// is the quantity of earlier pre-orders still unserved: while it is > 0 new
+// customers can't take the leftover units, so the product stays pre-order.
+export const preOrderUpdateFor = (
+  p: PreOrderFields,
+  config: PreorderConfig,
+  waitingPreOrders = 0
+): PreOrderUpdate | null => {
+  const source = p.preOrderSource ?? null;
+  const days = p.preOrderMinDays || 0;
+  const soldOut = availableOf(p) <= 0 || waitingPreOrders > 0;
+
+  if (soldOut && isPreOrderEligible(source, config)) {
+    const nextSource = source === "MANUAL" ? "MANUAL" : "AUTO";
+    if (p.isPreOrder && source === nextSource && days >= PRE_ORDER.MIN_DELIVERY_DAYS) return null;
+    return {
+      isPreOrder: true,
+      preOrderSource: nextSource,
+      // Preserve the product's own window; fall back to the site default.
+      preOrderMinDays: days >= PRE_ORDER.MIN_DELIVERY_DAYS ? days : clampPreOrderDays(config.defaultPreOrderDays),
+    };
+  }
+
+  if (!p.isPreOrder && source !== "AUTO") return null;
+  // AUTO (or a legacy pre-order with no source) returns to the site rule; its days
+  // were the site default, so they are re-derived on the next stock-out.
+  if (source === "AUTO" || source === null) return { isPreOrder: false, preOrderSource: null, preOrderMinDays: 0 };
+  return { isPreOrder: false };
+};
+
+// Guarded write: only applies while stock and policy still match what the decision
+// was based on. If another request changed them in between, that request runs its
+// own sync after its write, so the final state is still right (no lost update).
+const preOrderSyncOp = (
+  p: PreOrderFields & { _id: Types.ObjectId },
+  update: PreOrderUpdate
+) => ({
+  filter: {
+    _id: p._id,
+    isPreOrder: p.isPreOrder,
+    preOrderSource: p.preOrderSource ?? null,
+    $expr: availableOf(p) <= 0 ? { $lte: [AVAILABLE_EXPR, 0] } : { $gt: [AVAILABLE_EXPR, 0] },
+  },
+  update: { $set: update },
+});
+
+// ---- Serve waiting pre-orders first -----------------------------------------
+
+// Orders whose pre-order lines still wait for (or hold) stock: not yet delivered,
+// not cancelled, and not yet finalized.
+const OPEN_ORDER_STATUSES: OrderStatus[] = [
+  "PENDING",
+  "CONFIRMED",
+  "PROCESSING",
+  "READY_TO_SHIP",
+  "SHIPPED",
+  "OUT_FOR_DELIVERY",
+];
+
+interface PreOrderLine {
+  _id: Types.ObjectId;
+  orderId: Types.ObjectId;
+  quantity: number;
+}
+
+// A product's pre-order lines that have no stock yet, oldest order first. Starts
+// from the (few, indexed) open pre-order orders, so delivered history never piles up here.
+const waitingPreOrderLines = async (productId: ProductRef, session: ClientSession): Promise<PreOrderLine[]> => {
+  const orders = await Order.find({ isPreOrder: true, orderStatus: { $in: OPEN_ORDER_STATUSES }, stockRestoredAt: null })
+    .select("_id createdAt")
+    .sort({ createdAt: 1, _id: 1 })
+    .session(session)
+    .lean();
+  if (orders.length === 0) return [];
+  const rank = new Map(orders.map((o, i) => [String(o._id), i]));
+  const lines = await OrderItem.find({
+    orderId: { $in: orders.map((o) => o._id) },
+    productId,
+    isPreOrder: true,
+    stockReservedAt: null,
+  })
+    .select("_id orderId quantity")
+    .session(session)
+    .lean();
+  return lines.sort(
+    (a, b) => rank.get(String(a.orderId))! - rank.get(String(b.orderId))! || String(a._id).localeCompare(String(b._id))
+  );
+};
+
+// Reserve stock for one pre-order line if enough is available. Atomic: the $expr
+// filter only matches when the units are really there, so concurrent orders can
+// never push reserved past stock. Returns false (and changes nothing) otherwise.
+export const reservePreOrderLine = async (
+  productId: ProductRef,
+  line: PreOrderLine,
+  session: ClientSession,
+  createdBy: Types.ObjectId | null = null
+): Promise<boolean> => {
+  const claimed = await OrderItem.updateOne(
+    { _id: line._id, stockReservedAt: null },
+    { $set: { stockReservedAt: new Date() } },
+    { session }
+  );
+  if (claimed.modifiedCount !== 1) return false;
+  const result = await Product.findOneAndUpdate(
+    { _id: productId, $expr: { $gte: [AVAILABLE_EXPR, line.quantity] } },
+    { $inc: { reserved: line.quantity } },
+    { session, returnDocument: "after", projection: { stock: 1 } }
+  );
+  if (!result) {
+    await OrderItem.updateOne({ _id: line._id }, { $set: { stockReservedAt: null } }, { session });
+    return false;
+  }
+  await recordMovement(
+    {
+      productId,
+      type: "RESERVATION",
+      quantity: line.quantity,
+      previousStock: result.stock,
+      newStock: result.stock,
+      orderId: line.orderId,
+      createdBy,
+      reason: "Reserved for a waiting pre-order",
+    },
+    session
+  );
+  return true;
+};
+
+// Hand available stock to waiting pre-orders, strictly oldest first: when the next
+// line doesn't fit, stop, so a later order never jumps the queue. Returns the
+// quantity still waiting.
+const allocateToWaitingPreOrders = async (productId: ProductRef, session: ClientSession): Promise<number> => {
+  let waiting = 0;
+  for (const line of await waitingPreOrderLines(productId, session)) {
+    if (waiting === 0 && (await reservePreOrderLine(productId, line, session))) continue;
+    waiting += line.quantity;
+  }
+  return waiting;
+};
+
+export const syncPreOrderState = async (
   productId: ProductRef,
   session?: ClientSession
-): Promise<void> => {
-  const product = await Product.findById(productId)
-    .select("stock isPreOrder preOrderSource preOrderMinDays")
-    .session(session ?? null);
-  if (!product) return;
+): Promise<PreOrderUpdate | null> => {
+  // Allocation writes several documents, so it always runs inside a transaction.
+  if (!session) {
+    const own = await mongoose.startSession();
+    try {
+      let out: PreOrderUpdate | null = null;
+      await own.withTransaction(async () => {
+        out = await syncPreOrderState(productId, own);
+      });
+      return out;
+    } finally {
+      await own.endSession();
+    }
+  }
 
-  if (product.preOrderSource === "MANUAL") return;
+  let product = await Product.findById(productId).select(PRE_ORDER_SYNC_FIELDS).session(session).lean();
+  if (!product) return null;
+  let waiting = 0;
+  if (availableOf(product) > 0) {
+    waiting = await allocateToWaitingPreOrders(product._id, session);
+    product = await Product.findById(productId).select(PRE_ORDER_SYNC_FIELDS).session(session).lean();
+    if (!product) return null;
+  }
+  const update = preOrderUpdateFor(product, await getPreorderConfig(), waiting);
+  if (!update) return null;
+  const op = preOrderSyncOp(product, update);
+  const result = await Product.updateOne(op.filter, op.update, { session });
+  return result.modifiedCount === 1 ? update : null;
+};
 
+// Kept so older imports keep compiling.
+export const syncAutoPreOrderState = async (productId: ProductRef, session?: ClientSession): Promise<void> => {
+  await syncPreOrderState(productId, session);
+};
+
+// Bring every product in line with its stock and policy. Runs on startup (fixes
+// rows written before this sync existed) and after the site-wide pre-order setting
+// changes. Only reads products that can possibly be out of sync.
+export const reconcileAllPreOrderStates = async (): Promise<number> => {
   const config = await getPreorderConfig();
-  const outOfStock = (product.stock || 0) <= 0;
+  const candidates = await Product.find({
+    $or: [
+      { isPreOrder: true },
+      { preOrderSource: "AUTO" },
+      { $expr: { $lte: [AVAILABLE_EXPR, 0] } },
+    ],
+  })
+    .select(PRE_ORDER_SYNC_FIELDS)
+    .lean();
 
-  if (outOfStock && !product.isPreOrder && config.autoEnableOnStockOut) {
-    product.isPreOrder = true;
-    product.preOrderSource = "AUTO";
-    const days = Math.max(config.defaultPreOrderDays, PRE_ORDER.MIN_DELIVERY_DAYS);
-    product.preOrderMinDays = Math.min(days, PRE_ORDER.MAX_DELIVERY_DAYS);
-    await product.save({ session, validateBeforeSave: false });
-    return;
-  }
+  const ops = candidates.flatMap((p) => {
+    const update = preOrderUpdateFor(p, config);
+    return update ? [{ updateOne: preOrderSyncOp(p, update) }] : [];
+  });
+  let modified = ops.length ? (await Product.bulkWrite(ops, { ordered: false })).modifiedCount : 0;
 
-  if (!outOfStock && product.isPreOrder && product.preOrderSource === "AUTO") {
-    product.isPreOrder = false;
-    product.preOrderSource = null;
-    product.preOrderMinDays = 0;
-    await product.save({ session, validateBeforeSave: false });
+  // Products with pre-orders still waiting for stock (including ones placed before
+  // allocation existed): serve them from any available stock, then re-decide the mode.
+  const openPreOrders = await Order.find({
+    isPreOrder: true,
+    orderStatus: { $in: OPEN_ORDER_STATUSES },
+    stockRestoredAt: null,
+  })
+    .select("_id")
+    .lean();
+  if (openPreOrders.length > 0) {
+    const productIds: Types.ObjectId[] = await OrderItem.distinct("productId", {
+      orderId: { $in: openPreOrders.map((o) => o._id) },
+      isPreOrder: true,
+      stockReservedAt: null,
+      productId: { $ne: null },
+    });
+    for (const productId of productIds) {
+      if (await syncPreOrderState(productId)) modified++;
+    }
   }
+  return modified;
 };
 
 // Record an audit entry. All movement writes go through here so the stock-movement
@@ -148,6 +361,9 @@ export const reserveStock = async (
     // Nothing available to buy right now even though we still own stock; alert admin.
     notifyStockOut(result._id);
   }
+  // Last unit ordered → switch to pre-order (if allowed) in the same transaction, so
+  // the next customer sees Pre-order instead of an In Stock product they can't buy.
+  await syncPreOrderState(productId, session);
 };
 
 // Release a reservation (order cancelled before fulfilment). Idempotent at the
@@ -185,6 +401,8 @@ export const releaseReservation = async (
     },
     session
   );
+  // A cancelled order frees units → back to a regular in-stock product.
+  await syncPreOrderState(productId, session);
 };
 
 // ---- FIFO consumption -------------------------------------------------------
@@ -319,7 +537,7 @@ export const finalizeSale = async (
   }
 
   if (updated.stock === 0) notifyStockOut(updated._id);
-  await syncAutoPreOrderState(productId, session);
+  await syncPreOrderState(productId, session);
 
   return { consumed, cogs, revenue: roundMoney(revenue) };
 };
@@ -356,7 +574,7 @@ export const returnToStock = async (
     },
     session
   );
-  await syncAutoPreOrderState(productId, session);
+  await syncPreOrderState(productId, session);
 };
 
 // Record a damaged return (no restock): damagedQuantity++ and returnedQuantity++.

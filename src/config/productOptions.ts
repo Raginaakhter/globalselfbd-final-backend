@@ -15,6 +15,15 @@ export const AVAILABILITY = {
 } as const;
 export type Availability = (typeof AVAILABILITY)[keyof typeof AVAILABILITY];
 
+// Three-way storefront state. `availability` above stays two-valued for API
+// compatibility (pre-order counts as IN_STOCK = purchasable).
+export const AVAILABILITY_STATUS = {
+  IN_STOCK: "IN_STOCK",
+  PRE_ORDER: "PRE_ORDER",
+  OUT_OF_STOCK: "OUT_OF_STOCK",
+} as const;
+export type AvailabilityStatus = (typeof AVAILABILITY_STATUS)[keyof typeof AVAILABILITY_STATUS];
+
 // Limits used by validation
 export const LIMITS = {
   TITLE_MAX: 200,

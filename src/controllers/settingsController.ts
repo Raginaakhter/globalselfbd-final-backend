@@ -21,6 +21,7 @@ import {
   defaultPreorderConfig,
   type PreorderConfig,
 } from "../utils/preorder";
+import { reconcileAllPreOrderStates } from "../utils/inventory";
 import { PRE_ORDER } from "../config/orderOptions";
 
 // Note: Express 5 forwards errors thrown in async handlers to the error handler
@@ -267,8 +268,9 @@ export const updateNotificationSettings = async (req: Request, res: Response) =>
 
 // ---------- Pre-order config ----------
 //
-// Controls the auto-switch to pre-order when a product's stock hits 0.
-// Only admin-set (`preOrderSource: "MANUAL"`) products are left alone.
+// Controls the auto-switch to pre-order when a product's available stock hits 0.
+// Products where the admin enabled (MANUAL) or disabled (DISABLED) pre-order
+// follow their own setting instead.
 
 const preorderResponse = (config: PreorderConfig) => ({
   autoEnableOnStockOut: config.autoEnableOnStockOut,
@@ -326,10 +328,13 @@ export const updatePreorder = async (req: Request, res: Response) => {
   }
 
   await SiteSetting.findOneAndUpdate({ key: PREORDER_KEY }, { $set: { value: next } }, { upsert: true });
+  // Apply the new rule to every product right away (e.g. turning auto pre-order on
+  // switches today's out-of-stock products to pre-order; turning it off reverts them).
+  const productsUpdated = await reconcileAllPreOrderStates();
   res.status(200).json({
     success: true,
     message: "Pre-order settings updated successfully",
-    data: preorderResponse(next),
+    data: { ...preorderResponse(next), productsUpdated },
   });
 };
 

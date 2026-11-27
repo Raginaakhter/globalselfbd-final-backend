@@ -4,7 +4,7 @@ import OrderItem, { type IOrderItem } from "../models/OrderItem";
 import Combo from "../models/Combo";
 import AppError from "./AppError";
 import { releaseCoupon } from "./coupons";
-import { releaseReservation } from "./inventory";
+import { releaseReservation, syncPreOrderState } from "./inventory";
 import { CANCELLABLE_STATUSES, ORDER_STATUS } from "../config/orderOptions";
 
 export type OrderItemRecord = IOrderItem & { _id: Types.ObjectId };
@@ -162,11 +162,17 @@ export const cancelOrder = async (
 
       const items = await OrderItem.find({ orderId: order._id }).session(session);
       // Restore product stock from product lines AND from combo member snapshots.
-      // Pre-order lines never decremented stock at order time, so nothing to restore for them.
+      // A pre-order line holds a reservation only once stock was allocated to it
+      // (stockReservedAt); a still-waiting one gives up its place in the queue, so
+      // its product is re-synced to let the next waiting pre-order take the stock.
       const toRestore = new Map<string, number>();
+      const queueChanged = new Set<string>();
       for (const item of items) {
         if (item.productId) {
-          if (item.isPreOrder) continue;
+          if (item.isPreOrder && !item.stockReservedAt) {
+            queueChanged.add(String(item.productId));
+            continue;
+          }
           const key = String(item.productId);
           toRestore.set(key, (toRestore.get(key) || 0) + item.quantity);
         } else if (item.comboId) {
@@ -177,10 +183,14 @@ export const cancelOrder = async (
         }
       }
       for (const [productId, quantity] of toRestore) {
+        // releaseReservation re-syncs the product itself (serving waiting pre-orders first)
         await releaseReservation(productId, quantity, session, {
           orderId: order._id,
           createdBy: options.cancelledBy ?? null,
         });
+      }
+      for (const productId of queueChanged) {
+        if (!toRestore.has(productId)) await syncPreOrderState(productId, session);
       }
       // Roll back combo analytics
       const comboTotals = new Map<string, { quantity: number; revenue: number }>();

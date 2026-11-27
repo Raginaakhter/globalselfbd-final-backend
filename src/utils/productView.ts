@@ -1,14 +1,39 @@
 import type { Types } from "mongoose";
-import { AVAILABILITY, type Availability } from "../config/productOptions";
+import { AVAILABILITY, AVAILABILITY_STATUS, type Availability, type AvailabilityStatus } from "../config/productOptions";
 import type { IProduct } from "../models/Product";
 import type { ICategory } from "../models/Category";
+import AppError from "./AppError";
+import { isPreOrderEligible, type PreorderConfig } from "./preorder";
 
-// A pre-order product is always treated as available, because the admin promises delivery
-// after the fulfilment window even when today's stock is zero.
+// `available` is what customers can buy right now: stock - reserved.
+// A pre-order product is always treated as available (purchasable), because the admin
+// promises delivery after the fulfilment window even when today's stock is zero.
 export const getAvailability = (
-  stock: number,
+  available: number,
   isPreOrder = false
-): Availability => (stock > 0 || isPreOrder ? AVAILABILITY.IN_STOCK : AVAILABILITY.OUT_OF_STOCK);
+): Availability => (available > 0 || isPreOrder ? AVAILABILITY.IN_STOCK : AVAILABILITY.OUT_OF_STOCK);
+
+// The three storefront states: In Stock / Pre-order / Out of Stock.
+export const getAvailabilityStatus = (available: number, isPreOrder = false): AvailabilityStatus =>
+  isPreOrder ? AVAILABILITY_STATUS.PRE_ORDER : available > 0 ? AVAILABILITY_STATUS.IN_STOCK : AVAILABILITY_STATUS.OUT_OF_STOCK;
+
+const AVAILABLE_EXPR = { $subtract: ["$stock", { $ifNull: ["$reserved", 0] }] };
+
+// Mongo filter for ?availability=IN_STOCK | PRE_ORDER | OUT_OF_STOCK (matches getAvailabilityStatus).
+export const availabilityFilter = (value: string): Record<string, unknown> => {
+  if (value === AVAILABILITY_STATUS.PRE_ORDER) return { isPreOrder: true };
+  if (value === AVAILABILITY_STATUS.IN_STOCK) return { isPreOrder: { $ne: true }, $expr: { $gt: [AVAILABLE_EXPR, 0] } };
+  if (value === AVAILABILITY_STATUS.OUT_OF_STOCK) return { isPreOrder: { $ne: true }, $expr: { $lte: [AVAILABLE_EXPR, 0] } };
+  throw new AppError("availability must be IN_STOCK, PRE_ORDER or OUT_OF_STOCK", 400);
+};
+
+// Mongo filter for ?preOrderSource=AUTO | MANUAL | NONE — products selling as pre-order
+// right now because of the site rule (AUTO) or the admin's setting (MANUAL), or not at all.
+export const preOrderSourceFilter = (value: string): Record<string, unknown> => {
+  if (value === "NONE") return { isPreOrder: { $ne: true } };
+  if (value === "AUTO" || value === "MANUAL") return { isPreOrder: true, preOrderSource: value };
+  throw new AppError("preOrderSource must be AUTO, MANUAL or NONE", 400);
+};
 
 export const getFinalPrice = (product: Pick<IProduct, "customerSellPrice" | "customerSpecialPrice">): number =>
   product.customerSpecialPrice != null ? product.customerSpecialPrice : product.customerSellPrice;
@@ -39,13 +64,17 @@ const categoryRef = (category: CategoryLike) =>
     ? { _id: category._id, name: category.name, slug: category.slug, status: category.status }
     : category;
 
-// Shape a product for the response; hides stock/cost unless allowed
+// Shape a product for the response; hides stock/cost unless allowed.
+// Pass `preorder` (the site config) to admins so they also get the product's
+// pre-order policy: `preOrderEnabled` = may it sell as pre-order when out of stock.
 export const toProductResponse = (
   product: ProductLike | { toObject(): ProductLike },
-  visibility: ProductVisibility = {}
+  visibility: ProductVisibility = {},
+  preorder?: PreorderConfig
 ) => {
   const p: ProductLike = "toObject" in product && typeof product.toObject === "function" ? product.toObject() : (product as ProductLike);
   const finalPrice = getFinalPrice(p);
+  const available = Math.max(0, (p.stock ?? 0) - (p.reserved ?? 0));
 
   const data: Record<string, unknown> = {
     _id: p._id,
@@ -66,7 +95,8 @@ export const toProductResponse = (
     quantity: p.quantity,
     thumbnail: p.thumbnail,
     gallery: p.gallery,
-    availability: getAvailability(p.stock, p.isPreOrder),
+    availability: getAvailability(available, p.isPreOrder),
+    availabilityStatus: getAvailabilityStatus(available, p.isPreOrder),
     isPreOrder: p.isPreOrder,
     preOrderMinDays: p.preOrderMinDays,
     freeDelivery: !!p.freeDelivery,
@@ -80,10 +110,14 @@ export const toProductResponse = (
   if (visibility.canSeeStock) {
     data.stock = p.stock;
     data.reserved = p.reserved ?? 0;
-    data.available = Math.max(0, (p.stock ?? 0) - (p.reserved ?? 0));
+    data.available = available;
     data.lowStockThreshold = p.lowStockThreshold ?? 0;
     data.sku = p.sku ?? "";
   }
   if (visibility.canSeeCost) data.productCost = p.productCost;
+  if (visibility.canSeeInactive) {
+    data.preOrderSource = p.preOrderSource ?? null;
+    if (preorder) data.preOrderEnabled = isPreOrderEligible(p.preOrderSource, preorder);
+  }
   return data;
 };

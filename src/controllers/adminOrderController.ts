@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import mongoose from "mongoose";
+import mongoose, { type Types } from "mongoose";
 import Order, { type OrderDocument } from "../models/Order";
 import OrderItem from "../models/OrderItem";
 import Invoice from "../models/Invoice";
@@ -14,7 +14,7 @@ import { logActivity } from "../utils/activityLog";
 import { issueInvoiceQuietly } from "../utils/invoices";
 import { assertObjectId, escapeRegex, isNonEmptyString, getPagination, queryString } from "../utils/validators";
 import { findOrderOr404, getItemsByOrder, toOrderResponse, cancelOrder } from "../utils/orders";
-import { finalizeSale, releaseReservation } from "../utils/inventory";
+import { finalizeSale, releaseReservation, reservePreOrderLine } from "../utils/inventory";
 import { notifyOrderPlaced, notifyDeliveredAndReview } from "../utils/orderEmails";
 import StockMovement from "../models/StockMovement";
 import Expense from "../models/Expense";
@@ -70,9 +70,11 @@ const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 // Consume FIFO lots for every product line (and every combo member line) of an
 // order, drop stock + reserved, record SALE movements, and stamp stockRestoredAt
 // so a repeated SHIPPED-set (or a later deletion) never consumes stock twice.
-// Pre-order lines are skipped because they never reserved stock at creation.
-const finalizeOrderSale = async (order: OrderDocument): Promise<void> => {
-  const items = await OrderItem.find({ orderId: order._id }).lean();
+// Pre-order lines are deducted too: a line that already got stock allocated
+// (stockReservedAt) holds a reservation like a regular line; a line still waiting
+// is reserved now if the units are available (the admin is handing them over).
+// Only a waiting line with no available stock is skipped (nothing to deduct from).
+const finalizeOrderSale = async (order: OrderDocument, adminId: Types.ObjectId | null = null): Promise<void> => {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
@@ -83,13 +85,18 @@ const finalizeOrderSale = async (order: OrderDocument): Promise<void> => {
         { session, returnDocument: "after" }
       );
       if (!claimed) return;
+      // Read inside the transaction: allocation may have just reserved stock for a line.
+      const items = await OrderItem.find({ orderId: order._id }).session(session).lean();
 
       // Aggregate per-product need and matching revenue (so FIFO COGS has something
       // to compare against). Combo lines expand into their member products.
       const needs = new Map<string, { quantity: number; revenue: number }>();
       for (const item of items) {
         if (item.productId) {
-          if (item.isPreOrder) continue;
+          if (item.isPreOrder && !item.stockReservedAt) {
+            const reserved = await reservePreOrderLine(item.productId, item, session, adminId);
+            if (!reserved) continue;
+          }
           const key = String(item.productId);
           const existing = needs.get(key) || { quantity: 0, revenue: 0 };
           existing.quantity += item.quantity;
@@ -117,7 +124,7 @@ const finalizeOrderSale = async (order: OrderDocument): Promise<void> => {
       for (const [productId, need] of needs) {
         await finalizeSale(productId, need.quantity, need.revenue, session, {
           orderId: order._id,
-          createdBy: null,
+          createdBy: adminId,
         });
       }
     });
@@ -374,7 +381,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     // compute COGS, drop stock + reservation together. Idempotent via
     // stockRestoredAt so a re-attempted DELIVERED set never consumes twice.
     if (status === ORDER_STATUS.DELIVERED && !updated.stockRestoredAt) {
-      await finalizeOrderSale(updated);
+      await finalizeOrderSale(updated, getAuthUser(req)._id);
     }
   }
 
@@ -480,7 +487,8 @@ export const deleteOrder = async (req: Request, res: Response) => {
     const toRelease = new Map<string, number>();
     for (const item of items) {
       if (item.productId) {
-        if (item.isPreOrder) continue;
+        // Only pre-order lines that were allocated stock hold a reservation.
+        if (item.isPreOrder && !item.stockReservedAt) continue;
         const key = String(item.productId);
         toRelease.set(key, (toRelease.get(key) || 0) + item.quantity);
       } else if (item.comboId) {
