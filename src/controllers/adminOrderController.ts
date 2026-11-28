@@ -166,6 +166,9 @@ export const getAllOrders = async (req: Request, res: Response) => {
       throw new AppError(`Invalid status. Allowed: ${ORDER_STATUSES.join(", ")}`, 400);
     }
     filter.orderStatus = status;
+  } else if (queryString(req.query.active) === "true") {
+    // Open orders only (not yet delivered or cancelled), e.g. the dashboard's pending pre-order count.
+    filter.orderStatus = { $nin: ["DELIVERED", "CANCELLED"] };
   }
   if (paymentStatus) {
     if (!isPaymentStatus(paymentStatus)) {

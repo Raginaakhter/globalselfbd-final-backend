@@ -4135,6 +4135,31 @@
             }
           },
           {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "preOrder",
+                "normal"
+              ]
+            },
+            "description": "`preOrder` = only orders that were pre-orders at checkout; `normal` = only non-pre-orders; omit for all."
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true"
+              ]
+            },
+            "description": "`true` = open orders only (excludes DELIVERED and CANCELLED). Ignored when `status` is sent."
+          },
+          {
             "name": "paymentStatus",
             "in": "query",
             "required": false,
